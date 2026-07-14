@@ -1,0 +1,39 @@
+{
+  "name": "grokpix",
+  "version": "1.0.0",
+  "description": "KLIVA — automação Grok com interface de gerenciamento.",
+  "type": "module",
+  "main": "bot/activate/cli.js",
+  "scripts": {
+    "generate": "node bot/generate/cli.js",
+    "activate": "node bot/activate/cli.js",
+    "pix": "node bot/activate/cli.js",
+    "start": "node bot/activate/cli.js",
+    "dev:kliva": "node --watch-path=./server --watch-path=./bot server/dev.js",
+    "build:kliva": "npm run build --prefix ui",
+    "start:kliva": "npm run build:kliva && node server/index.js",
+    "test:proxy": "node bot/scripts/test-proxy.js",
+    "probe": "node bot/scripts/probe-entry.js",
+    "probe:subscribe": "node bot/scripts/probe-subscribe.js",
+    "probe:trial": "node bot/scripts/probe-trial-pages.js",
+    "test:modules": "node bot/scripts/test-modules.js",
+    "whatsapp:login": "node bot/scripts/whatsapp-login.js",
+    "whatsapp:connect": "node bot/scripts/whatsapp-login.js --connect",
+    "whatsapp:groups": "node bot/scripts/whatsapp-groups.js",
+    "whatsapp:test": "node bot/scripts/whatsapp-test-send.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "concurrently": "^10.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "pino": "^10.3.1",
+    "puppeteer-real-browser": "^1.4.4",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
