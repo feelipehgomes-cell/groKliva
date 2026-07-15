@@ -218,6 +218,8 @@ async function main() {
   copyFile(path.join(ROOT, 'release', 'launcher.mjs'), path.join(PKG_DIR, 'launcher.mjs'));
   copyFile(path.join(ROOT, 'release', 'iniciar.bat'), path.join(PKG_DIR, 'iniciar.bat'));
   copyFile(path.join(ROOT, 'release', 'iniciar.ps1'), path.join(PKG_DIR, 'iniciar.ps1'));
+  copyFile(path.join(ROOT, 'release', 'codigo-ativacao.bat'), path.join(PKG_DIR, 'codigo-ativacao.bat'));
+  copyFile(path.join(ROOT, 'release', 'codigo-ativacao.mjs'), path.join(PKG_DIR, 'codigo-ativacao.mjs'));
   copyFile(path.join(ROOT, 'release', 'LEIA-ME.txt'), path.join(PKG_DIR, 'LEIA-ME.txt'));
   createDataTemplates();
   patchEnvExample();

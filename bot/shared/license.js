@@ -91,7 +91,7 @@ function verifyOfflineLicense(key, { machineId } = {}) {
   }
 
   if (payload.mid && machineId && payload.mid !== machineId) {
-    return { ok: false, reason: 'Licenca vinculada a outra maquina.' };
+    return { ok: false, reason: 'Licenca vinculada a outra instalacao.' };
   }
 
   return {

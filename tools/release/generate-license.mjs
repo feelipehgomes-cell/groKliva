@@ -4,13 +4,16 @@
  *
  * Uso:
  *   npm run license:generate -- --email=cliente@email.com --days=365
- *   npm run license:generate -- --email=cliente@email.com --days=30 --machine
+ *   npm run license:generate -- --email=cliente@email.com --days=365 --machine-id=a3f8b2c1d4e5f678
+ *
+ * Anti-repasse (1 PC):
+ *   1. Cliente roda codigo-ativacao.bat e te manda o codigo
+ *   2. Voce gera com --machine-id=<codigo do cliente>
  *
  * Requer LICENSE_SIGNING_SECRET no .env (mesmo valor usado em npm run release).
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
@@ -33,21 +36,26 @@ function arg(name) {
 
 const email = arg('email').trim();
 const days = parseInt(arg('days') || '365', 10);
-const bindMachine = process.argv.includes('--machine');
+const machineId = arg('machine-id').trim().toLowerCase();
 
 if (!email) {
-  console.error('Uso: npm run license:generate -- --email=cliente@email.com --days=365 [--machine]');
+  console.error('Uso: npm run license:generate -- --email=cliente@email.com --days=365 [--machine-id=CODIGO]');
   process.exit(1);
 }
 
-function getMachineId() {
-  const raw = [
-    os.hostname(),
-    os.userInfo().username,
-    os.platform(),
-    os.arch(),
-  ].join('|');
-  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
+if (process.argv.includes('--machine') && !machineId) {
+  console.error('');
+  console.error('[license] --machine sozinho vincula ao SEU PC (desenvolvedor), nao ao do cliente.');
+  console.error('[license] Fluxo correto:');
+  console.error('[license]   1. Cliente roda codigo-ativacao.bat e te envia o codigo');
+  console.error('[license]   2. npm run license:generate -- --email=... --days=... --machine-id=CODIGO');
+  console.error('');
+  process.exit(1);
+}
+
+if (machineId && !/^[a-f0-9]{16}$/.test(machineId)) {
+  console.error('[license] --machine-id invalido (esperado: codigo de 16 caracteres, ex: a3f8b2c1d4e5f678)');
+  process.exit(1);
 }
 
 const payload = {
@@ -56,9 +64,9 @@ const payload = {
   exp: Date.now() + days * 24 * 60 * 60 * 1000,
 };
 
-if (bindMachine) {
-  payload.mid = getMachineId();
-  console.log(`[license] Vinculada a esta maquina (mid=${payload.mid})`);
+if (machineId) {
+  payload.mid = machineId;
+  console.log(`[license] Vinculada ao codigo de ativacao do cliente (${machineId})`);
 }
 
 const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');

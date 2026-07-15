@@ -44,6 +44,14 @@ INSTALACAO
 
 6. Abra no navegador: http://localhost:4000
 
+LICENCA VINCULADA (anti-repasse)
+--------------------------------
+Se o vendedor pediu seu codigo de ativacao:
+1. Rode codigo-ativacao.bat (na pasta do KLIVA)
+2. Copie o codigo de 16 caracteres e envie ao vendedor
+3. Ele gera sua licenca e te manda a KLIVA_LICENSE_KEY
+4. Cole no .env e use iniciar.bat
+
 
 WHATSAPP (primeira vez)
 -----------------------

@@ -264,6 +264,7 @@ O ZIP contém:
 - `ui/dist/` — interface buildada
 - `node_modules/` — dependências de produção
 - `iniciar.bat` / `iniciar.ps1` — atalho para o cliente
+- `codigo-ativacao.bat` — cliente obtém o código de ativação (anti-repasse)
 - `LEIA-ME.txt` — instruções para o comprador
 - `.env.example` — template (sem segredo seu)
 
@@ -287,7 +288,7 @@ Parâmetros:
 |-----------|-------------|-----------|
 | `--email=` | Sim | E-mail do comprador (referência interna, fica dentro da key) |
 | `--days=` | Não | Validade em dias (padrão: `365`) |
-| `--machine` | Não | Vincula a key ao PC onde o comando roda (anti-repasse) |
+| `--machine-id=` | Não | Código de ativação do **cliente** (anti-repasse — ver abaixo) |
 
 Exemplos:
 
@@ -298,9 +299,76 @@ npm run license:generate -- --email=maria@email.com --days=30
 # Anual
 npm run license:generate -- --email=joao@email.com --days=365
 
+# Anti-repasse — use o código que o CLIENTE te enviou
+npm run license:generate -- --email=joao@email.com --days=365 --machine-id=a3f8b2c1d4e5f678
+
 # Testar key expirada
 npm run license:generate -- --email=teste-expirado@local --days=-1
 ```
+
+#### Anti-repasse (1 PC por key)
+
+Existem **dois modos** de licença:
+
+| Modo | Comando | Comportamento |
+|------|---------|---------------|
+| **Padrão** (rápido) | sem `--machine-id` | Key funciona em **qualquer PC** até expirar |
+| **Anti-repasse** | com `--machine-id` | Key funciona **só na instalação do cliente** |
+
+##### Por que o código tem que vir do cliente?
+
+O código de ativação é gravado **dentro da key no momento em que você gera a licença** — não quando o cliente abre o bot.
+
+Se você gerasse a key usando um código **do seu PC** (desenvolvedor), no PC do comprador o código seria **diferente** → a validação **nunca bateria** e o bot mostraria `Licenca vinculada a outra instalacao.`
+
+Por isso o cliente roda `codigo-ativacao.bat` e te envia o código **da instalação dele** antes de você gerar a key.
+
+##### Como o código é gerado
+
+O `codigo-ativacao.bat` produz um código único de 16 caracteres para aquela instalação (ex.: `a3f8b2c1d4e5f678`). Você não precisa saber como ele é calculado — só colar em `--machine-id=`.
+
+##### Fluxo anti-repasse (passo a passo)
+
+```
+CLIENTE                              VOCÊ (vendedor)
+   │                                      │
+   ├─ extrai o ZIP                        │
+   ├─ roda codigo-ativacao.bat            │
+   ├─ vê: a3f8b2c1d4e5f678                │
+   └─ te manda o código ─────────────────►├─ gera a key:
+                                            │  npm run license:generate --
+                                            │    --email=cliente@email.com
+                                            │    --days=365
+                                            │    --machine-id=a3f8b2c1d4e5f678
+                                            └─ envia KLIVA_LICENSE_KEY pronta
+```
+
+1. Cliente extrai o ZIP e roda **`codigo-ativacao.bat`**
+2. Aparece um código de 16 caracteres (ex.: `a3f8b2c1d4e5f678`)
+3. Cliente te manda esse código (WhatsApp, e-mail, etc.)
+4. Você gera a key com `--machine-id=CODIGO_DO_CLIENTE` — **nesse instante** o código entra na key
+5. Cliente cola a key no `.env` e usa só naquela instalação
+
+> **Não use** `--machine` sozinho. O script bloqueia e exige `--machine-id` com o código que o cliente te enviou.
+
+##### Quando a validação acontece (no cliente)
+
+A checagem roda **ao iniciar o KLIVA em modo release**:
+
+| Momento | O que valida |
+|---------|----------------|
+| `iniciar.bat` → servidor sobe | key + assinatura + expiração + código de ativação |
+| Cliente inicia o bot de ativação na interface | mesma validação de novo |
+
+Se o código da key ≠ código da instalação atual → o processo **encerra na hora** (antes de Chrome, WhatsApp, etc.).
+
+**Cache de 24h:** após a primeira validação OK, grava `data/.license-cache.json` e não revalida por 24 horas. Para forçar nova checagem, apague esse arquivo.
+
+##### Limitações do anti-repasse
+
+- Não é proteção 100% (software local sempre pode ser contornado por quem souber)
+- Cliente que **muda de PC** ou **formata** precisa de key nova (novo `codigo-ativacao.bat`)
+- Para máxima velocidade nas vendas, use o modo **padrão** (sem `--machine-id`)
 
 Saída no terminal:
 
@@ -320,6 +388,8 @@ Envie a key ao comprador **por canal separado** do ZIP (e-mail, WhatsApp, etc.).
 
 ### 4. O que o comprador faz
 
+**Modo padrão (você já enviou a key):**
+
 1. Extrair o ZIP
 2. Copiar `.env.example` → `.env`
 3. Colar a licença:
@@ -332,34 +402,66 @@ KLIVA_LICENSE_KEY=KLIVA.xxxxx.yyyyy
 5. Duplo clique em `iniciar.bat`
 6. Abrir http://localhost:4000
 
+**Modo anti-repasse (você pediu o código de ativação antes):**
+
+1. Extrair o ZIP
+2. Rodar **`codigo-ativacao.bat`** e enviar o código ao vendedor
+3. Aguardar a `KLIVA_LICENSE_KEY` que o vendedor gera com esse código
+4. Colar no `.env` e seguir os passos acima
+
 ---
 
 ### 5. Como a validação funciona
 
-- Modo **offline** (padrão): a key é assinada com HMAC usando o `LICENSE_SIGNING_SECRET` embarcado no build.
-- Ao iniciar, o KLIVA verifica:
-  - formato da key (`KLIVA.<payload>.<assinatura>`)
-  - assinatura válida
-  - data de expiração (`exp`)
-  - vínculo de máquina (`mid`), se gerada com `--machine`
-- Cache local: após validar, grava `data/.license-cache.json` por **24 horas** (evita revalidar a cada restart).
-- Key expirada → bot bloqueia com `[KLIVA] Licenca expirada.`
-- Key ausente/inválida → `[KLIVA] Licenca invalida ou ausente.`
+A key tem o formato `KLIVA.<dados_codificados>.<assinatura>`. Os dados codificados podem conter:
+
+| Campo | Sempre | Anti-repasse |
+|-------|--------|--------------|
+| `email` | ✅ | ✅ |
+| `exp` (expiração) | ✅ | ✅ |
+| `mid` (código de ativação) | ❌ | ✅ (só com `--machine-id`) |
+
+Modo **offline** (padrão): assinatura HMAC com o `LICENSE_SIGNING_SECRET` embarcado no build.
+
+Ao iniciar (release), o KLIVA verifica:
+
+1. formato da key
+2. assinatura válida (não foi adulterada)
+3. data de expiração
+4. `mid`, se existir na key — compara com o código da instalação atual
+
+Mensagens comuns:
+
+| Situação | Mensagem |
+|----------|----------|
+| Key expirada | `Licenca expirada.` |
+| Key de outra instalação | `Licenca vinculada a outra instalacao.` |
+| Key inválida/ausente | `Licenca invalida ou ausente.` |
+| Key OK | `Licenca valida (email@...) — expira: DD/MM/AAAA` |
 
 **Testar expiração:** gere com `--days=-1`, coloque no `.env` e apague `data/.license-cache.json` antes de testar.
 
-**Compartilhamento:** no modo padrão (sem `--machine`), a mesma key funciona em vários PCs até expirar. Para limitar a 1 máquina, use `--machine`.
+**Compartilhamento:** sem `--machine-id`, a mesma key funciona em vários PCs até expirar. Com `--machine-id`, só na instalação cujo código o cliente te enviou.
 
 ---
 
 ### 6. Checklist por venda
+
+**Modo padrão (mais rápido):**
 
 - [ ] `LICENSE_SIGNING_SECRET` definido no seu `.env`
 - [ ] `npm run release -- --version=X.Y.Z`
 - [ ] `npm run license:generate -- --email=... --days=...`
 - [ ] Enviar ZIP ao comprador
 - [ ] Enviar key separada
-- [ ] Confirmar que o cliente instalou Node 18+ e Chrome
+- [ ] Confirmar Node 18+ e Chrome no cliente
+
+**Modo anti-repasse (1 PC):**
+
+- [ ] Enviar ZIP ao comprador
+- [ ] Cliente roda `codigo-ativacao.bat` e te manda o código
+- [ ] `npm run license:generate -- --email=... --days=... --machine-id=CODIGO`
+- [ ] Enviar key ao comprador
 
 ---
 
