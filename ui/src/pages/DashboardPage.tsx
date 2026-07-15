@@ -3,9 +3,7 @@ import { api, connectBotLogs } from '../api/client';
 import { LogTerminal } from '../components/LogTerminal';
 import { ReadyAccountsPanel } from '../components/ReadyAccountsPanel';
 import type { ReadyAccount } from '../components/ReadyAccountsPanel';
-import { botPrefs, persistActivateOpts, persistConcurrency } from '../utils/botPrefs';
-
-type Tab = 'resumo' | 'gerador' | 'ativador';
+import { botPrefs, persistActivateOpts } from '../utils/botPrefs';
 
 type GroupSummary = {
   id: string;
@@ -19,77 +17,131 @@ type GroupSummary = {
   readyActivate?: ReadyAccount[];
 };
 
-function GroupBotControl({
+function GroupCard({
   group,
   stopping,
+  blockedByOther,
+  togglingCommands,
   onStart,
   onStop,
+  onReset,
+  onToggleCommands,
 }: {
   group: GroupSummary;
   stopping: boolean;
+  blockedByOther: boolean;
+  togglingCommands: boolean;
   onStart: () => void;
   onStop: () => void;
+  onReset: () => void;
+  onToggleCommands: () => void;
 }) {
   const commandsOn = group.enabled !== false;
+  const startDisabled = !commandsOn || blockedByOther;
+  const startTitle = !commandsOn
+    ? 'Ative os comandos em Grupos WhatsApp'
+    : blockedByOther
+      ? 'Outro grupo esta rodando'
+      : undefined;
+  const readyCount = group.readyActivate?.length ?? 0;
+
   return (
-    <div className="bot-status-row">
-      <div className="bot-status-info">
-        <span className="bot-status-label">{group.label}</span>
-        <span
-          className={`badge ${
-            stopping ? 'badge-running' : group.running ? 'badge-running' : 'badge-idle'
-          }`}
-        >
-          {stopping ? 'Parando...' : group.running ? 'Rodando' : 'Parado'}
-        </span>
-        {!commandsOn && (
-          <span className="badge badge-idle" title="Comandos WhatsApp desativados neste grupo">
-            Comandos off
+    <div className="card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <div>
+          <p className="card-title" style={{ margin: 0 }}>
+            {group.label}
+          </p>
+          <span
+            className={`badge ${stopping || group.running ? 'badge-running' : 'badge-idle'}`}
+          >
+            {stopping ? 'Parando...' : group.running ? 'Rodando' : 'Parado'}
           </span>
+          {!commandsOn && (
+            <span className="badge badge-idle" style={{ marginLeft: 6 }} title="Comandos WhatsApp desativados neste grupo">
+              Comandos off
+            </span>
+          )}
+          <span style={{ display: 'block', marginTop: 6, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            {readyCount === 1 ? '1 conta pronta' : `${readyCount} contas prontas`}
+          </span>
+        </div>
+        {!group.running && !stopping ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+            disabled={startDisabled}
+            title={startTitle}
+            onClick={onStart}
+          >
+            Iniciar
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-danger"
+            style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+            disabled={stopping}
+            onClick={onStop}
+          >
+            {stopping ? 'Parando...' : 'Pausar'}
+          </button>
         )}
-        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-          {(group.readyActivate?.length ?? 0) === 1
-            ? '1 conta pronta'
-            : `${group.readyActivate?.length ?? 0} contas prontas`}
-        </span>
       </div>
-      {!group.running && !stopping ? (
-        <button
-          type="button"
-          className="btn btn-primary"
-          style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-          disabled={!commandsOn}
-          title={commandsOn ? undefined : 'Ative os comandos em Grupos WhatsApp'}
-          onClick={onStart}
-        >
-          Iniciar
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="btn btn-danger"
-          style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-          disabled={stopping}
-          onClick={onStop}
-        >
-          {stopping ? 'Parando...' : 'Pausar'}
-        </button>
-      )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 16, gap: 8 }}>
+        <div style={{ display: 'flex', gap: 20 }}>
+          <div>
+            <div className="metric-value" style={{ fontSize: '1.5rem' }}>
+              {group.activatedCount}
+            </div>
+            <div className="metric-label">Marcador do grupo</div>
+          </div>
+          <div>
+            <div className="metric-value" style={{ fontSize: '1.5rem' }}>
+              {group.activatedToday}
+            </div>
+            <div className="metric-label">Ativadas hoje</div>
+          </div>
+        </div>
+        <div className="card-actions">
+          <button
+            type="button"
+            className={`btn btn-sm ${commandsOn ? 'btn-danger' : 'btn-primary'}`}
+            disabled={togglingCommands}
+            title={
+              commandsOn
+                ? 'Para de receber /start /stop /status /count'
+                : 'Reativar comandos WhatsApp neste grupo'
+            }
+            onClick={onToggleCommands}
+          >
+            {togglingCommands ? 'Salvando...' : commandsOn ? 'Desativar' : 'Ativar'}
+          </button>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={onReset}>
+            Zerar marcador
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 function TerminalLogs({
   groupId,
+  label,
   running,
 }: {
-  groupId: string;
+  groupId: string | null;
+  label: string | null;
   running: boolean;
 }) {
   const [logs, setLogs] = useState<{ line: string; stream: string }[]>([]);
 
   useEffect(() => {
     setLogs([]);
+    if (!groupId) return;
     const disconnect = connectBotLogs('activate', (entry) => {
       setLogs((prev) => [
         ...prev.slice(-499),
@@ -103,160 +155,31 @@ function TerminalLogs({
     <div className="activity-panel">
       <div className="activity-panel-header">
         <p className="card-title" style={{ margin: 0 }}>
-          Logs {running && <span className="badge badge-running">ao vivo</span>}
+          Logs
+          {label && <span style={{ marginLeft: 6, color: 'var(--text-muted)' }}>— {label}</span>}
+          {running && <span className="badge badge-running" style={{ marginLeft: 8 }}>ao vivo</span>}
         </p>
       </div>
       <div className="activity-panel-body">
         <LogTerminal
           logs={logs}
-          emptyMessage="Nenhum log ainda. Inicie o bot acima."
+          emptyMessage={
+            groupId
+              ? 'Sem logs recentes deste bot.'
+              : 'Nenhum bot em execucao. Inicie um grupo acima.'
+          }
         />
       </div>
-    </div>
-  );
-}
-
-function GenerateActivityTab({
-  running,
-  count,
-  accounts,
-  onRefresh,
-}: {
-  running: boolean;
-  count: number;
-  accounts: ReadyAccount[];
-  onRefresh: () => void;
-}) {
-  const [logs, setLogs] = useState<{ line: string; stream: string }[]>([]);
-
-  useEffect(() => {
-    setLogs([]);
-    const disconnect = connectBotLogs('generate', (entry) => {
-      setLogs((prev) => [
-        ...prev.slice(-499),
-        { line: entry.line, stream: entry.stream },
-      ]);
-    });
-    return disconnect;
-  }, []);
-
-  return (
-    <div className="dashboard-activity-tab">
-      <p className="dashboard-activity-subtitle">{count} conta(s) gerada(s) hoje</p>
-      <div className="activity-split">
-        <div className="activity-panel">
-          <div className="activity-panel-header">
-            <p className="card-title" style={{ margin: 0 }}>
-              Logs {running && <span className="badge badge-running">ao vivo</span>}
-            </p>
-          </div>
-          <div className="activity-panel-body">
-            <LogTerminal logs={logs} emptyMessage="Nenhum log ainda." />
-          </div>
-        </div>
-        <ReadyAccountsPanel
-          kind="generate"
-          accounts={accounts}
-          accountsLabel="Contas geradas"
-          onReleased={onRefresh}
-        />
-      </div>
-    </div>
-  );
-}
-
-function ResumoTab({
-  groups,
-  onReset,
-  onToggleCommands,
-  togglingId,
-}: {
-  groups: GroupSummary[];
-  onReset: (groupId: string) => void;
-  onToggleCommands: (groupId: string, enabled: boolean) => void;
-  togglingId: string | null;
-}) {
-  if (!groups.length) {
-    return (
-      <p style={{ color: 'var(--text-muted)' }}>
-        Nenhum grupo cadastrado. Adicione grupos em &quot;Grupos WhatsApp&quot;.
-      </p>
-    );
-  }
-
-  return (
-    <div className="grid-2" style={{ gap: 12 }}>
-      {groups.map((g) => (
-        <div key={g.id} className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <p className="card-title" style={{ margin: 0 }}>
-                {g.label}
-              </p>
-              <span className={`badge ${g.running ? 'badge-running' : 'badge-idle'}`}>
-                {g.running ? 'Bot rodando' : 'Bot parado'}
-              </span>
-              {g.enabled === false && (
-                <span className="badge badge-idle" style={{ marginLeft: 6 }}>
-                  Comandos off
-                </span>
-              )}
-            </div>
-            <div className="card-actions">
-              <button
-                type="button"
-                className={`btn btn-sm ${g.enabled !== false ? 'btn-danger' : 'btn-primary'}`}
-                disabled={togglingId === g.id}
-                title={
-                  g.enabled !== false
-                    ? 'Para de receber /start /stop /status /count'
-                    : 'Reativar comandos WhatsApp neste grupo'
-                }
-                onClick={() => onToggleCommands(g.id, g.enabled === false)}
-              >
-                {togglingId === g.id
-                  ? 'Salvando...'
-                  : g.enabled !== false
-                    ? 'Desativar'
-                    : 'Ativar'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => onReset(g.id)}
-              >
-                Zerar marcador
-              </button>
-            </div>
-          </div>
-          <div className="grid-2" style={{ marginTop: 16, gap: 8 }}>
-            <div>
-              <div className="metric-value" style={{ fontSize: '1.5rem' }}>
-                {g.activatedCount}
-              </div>
-              <div className="metric-label">PIX ativados</div>
-            </div>
-            <div>
-              <div className="metric-value" style={{ fontSize: '1.5rem' }}>
-                {g.activatedToday}
-              </div>
-              <div className="metric-label">Ativadas hoje</div>
-            </div>
-          </div>
-        </div>
-      ))}
     </div>
   );
 }
 
 export function DashboardPage() {
   const [data, setData] = useState<any>(null);
-  const [tab, setTab] = useState<Tab>('resumo');
   const [stoppingGroup, setStoppingGroup] = useState<string | null>(null);
-  const [stoppingGenerate, setStoppingGenerate] = useState(false);
   const [togglingCommandsId, setTogglingCommandsId] = useState<string | null>(null);
   const [logGroupId, setLogGroupId] = useState<string | null>(null);
-  const [readyGroupId, setReadyGroupId] = useState<string | null>(null);
+  const [readyGroupId, setReadyGroupId] = useState<string>('all');
 
   const refresh = useCallback(() => {
     api.dashboard().then(setData).catch(console.error);
@@ -268,15 +191,11 @@ export function DashboardPage() {
     return () => clearInterval(t);
   }, [refresh]);
 
+  const runningGroupId: string | null = data?.bots?.runningGroupId ?? null;
+
   useEffect(() => {
-    const groups: GroupSummary[] = data?.groups || [];
-    if (!logGroupId && groups.length) {
-      setLogGroupId(groups[0].id);
-    }
-    if (!readyGroupId && groups.length) {
-      setReadyGroupId(groups[0].id);
-    }
-  }, [data, logGroupId, readyGroupId]);
+    if (runningGroupId) setLogGroupId(runningGroupId);
+  }, [runningGroupId]);
 
   if (!data) {
     return (
@@ -288,32 +207,11 @@ export function DashboardPage() {
   }
 
   const groups: GroupSummary[] = data.groups || [];
-  const generateRunning = data.bots?.generate?.running;
-  const logGroup = groups.find((g) => g.id === logGroupId) || groups[0];
-  const readyGroup = groups.find((g) => g.id === readyGroupId) || groups[0];
-
-  const handleStartGenerate = async () => {
-    try {
-      const opts = botPrefs.loadGenerate();
-      await persistConcurrency(opts.concurrency);
-      await api.startGenerate(opts);
-      refresh();
-    } catch (e: any) {
-      alert(e.message);
-    }
-  };
-
-  const handleStopGenerate = async () => {
-    setStoppingGenerate(true);
-    try {
-      await api.stopBot('generate');
-      refresh();
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setStoppingGenerate(false);
-    }
-  };
+  const anyRunning = !!data.bots?.anyActivateRunning;
+  const logGroup = groups.find((g) => g.id === logGroupId) || null;
+  const readyGroup = groups.find((g) => g.id === readyGroupId) || null;
+  const readyAccounts =
+    readyGroupId === 'all' ? data.readyActivate || [] : readyGroup?.readyActivate || [];
 
   const handleStartActivate = async (groupId: string) => {
     try {
@@ -375,149 +273,66 @@ export function DashboardPage() {
         </div>
       </div>
 
-      <div className="card dashboard-activity">
-        <div className="tabs">
-          <button
-            type="button"
-            className={`tab${tab === 'resumo' ? ' active' : ''}`}
-            onClick={() => setTab('resumo')}
-          >
-            Resumo
-          </button>
-          <button
-            type="button"
-            className={`tab${tab === 'ativador' ? ' active' : ''}`}
-            onClick={() => setTab('ativador')}
-          >
-            Ativador
-          </button>
-          <button
-            type="button"
-            className={`tab${tab === 'gerador' ? ' active' : ''}`}
-            onClick={() => setTab('gerador')}
-          >
-            Gerador
-          </button>
+      <div className="card dashboard-metrics">
+        <div className="grid-2">
+          <div>
+            <div className="metric-value purple">{data.activatedTotal ?? 0}</div>
+            <div className="metric-label">Total ativadas pelo bot</div>
+          </div>
+          <div>
+            <div className="metric-value">{data.activatedToday ?? 0}</div>
+            <div className="metric-label">Ativadas hoje</div>
+          </div>
         </div>
+      </div>
 
+      <div className="card dashboard-activity">
         <div className="dashboard-activity-body">
-          {tab === 'resumo' && (
-            <ResumoTab
-              groups={groups}
-              onReset={handleResetStats}
-              onToggleCommands={handleToggleCommands}
-              togglingId={togglingCommandsId}
-            />
-          )}
-
-          {tab === 'gerador' && (
-            <>
-              <div className="card dashboard-status" style={{ marginBottom: 12 }}>
-                <div className="bot-status-row">
-                  <div className="bot-status-info">
-                    <span className="bot-status-label">Gerar contas</span>
-                    <span
-                      className={`badge ${generateRunning ? 'badge-running' : 'badge-idle'}`}
-                    >
-                      {stoppingGenerate ? 'Parando...' : generateRunning ? 'Rodando' : 'Parado'}
-                    </span>
+          <div className="dashboard-activity-tab">
+            <div className="card dashboard-status dashboard-status--groups">
+              <p className="card-title">Ativador por grupo</p>
+              {groups.length === 0 ? (
+                <p style={{ color: 'var(--text-muted)' }}>
+                  Cadastre grupos em &quot;Grupos WhatsApp&quot;.
+                </p>
+              ) : (
+                <div className="bot-status-grid-scroll">
+                  <div className="grid-2" style={{ gap: 12 }}>
+                    {groups.map((g) => (
+                      <GroupCard
+                        key={g.id}
+                        group={g}
+                        stopping={stoppingGroup === g.id}
+                        blockedByOther={anyRunning && !g.running}
+                        togglingCommands={togglingCommandsId === g.id}
+                        onStart={() => handleStartActivate(g.id)}
+                        onStop={() => handleStopActivate(g.id)}
+                        onReset={() => handleResetStats(g.id)}
+                        onToggleCommands={() => handleToggleCommands(g.id, g.enabled === false)}
+                      />
+                    ))}
                   </div>
-                  {!generateRunning && !stoppingGenerate ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-                      onClick={handleStartGenerate}
-                    >
-                      Iniciar
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-                      disabled={stoppingGenerate}
-                      onClick={handleStopGenerate}
-                    >
-                      {stoppingGenerate ? 'Parando...' : 'Pausar'}
-                    </button>
-                  )}
                 </div>
-              </div>
-              <GenerateActivityTab
-                running={!!generateRunning}
-                count={data.generatedToday}
-                accounts={data.readyGenerate || []}
-                onRefresh={refresh}
-              />
-            </>
-          )}
-
-          {tab === 'ativador' && (
-            <div className="dashboard-activity-tab">
-              <div className="card dashboard-status dashboard-status--groups">
-                <p className="card-title">Ativador por grupo</p>
-                {groups.length === 0 ? (
-                  <p style={{ color: 'var(--text-muted)' }}>
-                    Cadastre grupos em &quot;Grupos WhatsApp&quot;.
-                  </p>
-                ) : (
-                  <div className="bot-status-grid-scroll">
-                    <div className="bot-status-grid">
-                      {groups.map((g) => (
-                        <GroupBotControl
-                          key={g.id}
-                          group={g}
-                          stopping={stoppingGroup === g.id}
-                          onStart={() => handleStartActivate(g.id)}
-                          onStop={() => handleStopActivate(g.id)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {logGroup && (
-                <>
-                  <div className="dashboard-ativador-controls">
-                    <label className="header-controls__field" style={{ fontSize: '0.85rem' }}>
-                      <span>Logs do grupo:</span>
-                      <select
-                        className="select select--inline"
-                        value={logGroup.id}
-                        onChange={(e) => setLogGroupId(e.target.value)}
-                      >
-                        {groups.map((g) => (
-                          <option key={g.id} value={g.id}>
-                            {g.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <p className="dashboard-activity-subtitle">
-                    {logGroup.activatedToday} conta(s) ativada(s) hoje
-                  </p>
-                  <div className="activity-split dashboard-ativador-split">
-                    <TerminalLogs
-                      groupId={logGroup.id}
-                      running={!!logGroup.running}
-                    />
-                    <ReadyAccountsPanel
-                      kind="activate"
-                      accounts={readyGroup?.readyActivate || []}
-                      accountsLabel="Contas prontas"
-                      groups={groups.map((g) => ({ id: g.id, label: g.label }))}
-                      groupId={readyGroup?.id}
-                      onGroupChange={setReadyGroupId}
-                      onReleased={refresh}
-                    />
-                  </div>
-                </>
               )}
             </div>
-          )}
+
+            <div className="activity-split dashboard-ativador-split">
+              <TerminalLogs
+                groupId={logGroupId}
+                label={logGroup?.label ?? null}
+                running={!!logGroup?.running}
+              />
+              <ReadyAccountsPanel
+                kind="activate"
+                accounts={readyAccounts}
+                accountsLabel="Contas prontas"
+                groups={groups.map((g) => ({ id: g.id, label: g.label }))}
+                groupId={readyGroupId}
+                onGroupChange={setReadyGroupId}
+                onReleased={refresh}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>

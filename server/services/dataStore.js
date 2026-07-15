@@ -14,7 +14,7 @@ import {
   markReadyAccountsReleased,
 } from './readyAccountsStore.js';
 import { listGroups, resolveGroupPaths, resolveGroupPathsById, getGroupById } from './groupStore.js';
-import { getGroupStats } from './groupStatsStore.js';
+import { getGroupStats, getGlobalActivatedTotal } from './groupStatsStore.js';
 import { botManager } from './botManager.js';
 
 function resolveFile(rel) {
@@ -147,13 +147,26 @@ export async function deleteAccount(email, _groupId = null) {
   return listAccounts();
 }
 
-export function getGeneratedResults(limit = 50) {
-  return readJsonArray(config.generatedResultsFile).slice(-limit).reverse();
-}
-
 export function getActivationResults(limit = 50, groupId = null) {
   const file = groupId ? resultsFileForGroup(groupId) : config.resultsFile;
-  return readJsonArray(file).slice(-limit).reverse();
+  const local = readJsonArray(file);
+  if (!groupId) return local.slice(-limit).reverse();
+
+  // Inclui results antigos no arquivo global com o mesmo groupId
+  const globalRows = readJsonArray(config.resultsFile).filter(
+    (r) => String(r?.groupId || '') === String(groupId),
+  );
+  const byEmail = new Map();
+  for (const r of [...globalRows, ...local]) {
+    const key = String(r?.email || '')
+      .trim()
+      .toLowerCase();
+    if (key) byEmail.set(key, r);
+  }
+  return [...byEmail.values()]
+    .sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))
+    .slice(-limit)
+    .reverse();
 }
 
 export function listCpfs() {
@@ -238,21 +251,7 @@ function buildPasswordMap() {
     if (a.email && a.password) map.set(a.email.toLowerCase(), a.password);
   }
 
-  try {
-    for (const a of loadAccounts(config.generatedAccountsFile)) {
-      const key = a.email?.toLowerCase();
-      if (key && a.password && !map.has(key)) map.set(key, a.password);
-    }
-  } catch {
-    /* ignore */
-  }
-
   for (const r of getActivationResults(500)) {
-    const key = String(r.email || '').toLowerCase();
-    if (key && r.password && !map.has(key)) map.set(key, r.password);
-  }
-
-  for (const r of getGeneratedResults(500)) {
     const key = String(r.email || '').toLowerCase();
     if (key && r.password && !map.has(key)) map.set(key, r.password);
   }
@@ -284,14 +283,9 @@ export function getDashboard() {
   const cpfs = listCpfs();
   const paidCount = getPaidCount();
   const paidEmails = getPaidEmails();
-  const generated = getGeneratedResults(50);
   const passwordMap = buildPasswordMap();
 
   const today = new Date().toISOString().slice(0, 10);
-  const generatedTodayItems = generated
-    .filter((r) => r.at?.startsWith(today))
-    .map((r) => enrichResult(r, passwordMap));
-  const generatedToday = generatedTodayItems.length;
 
   const groups = listGroups().map((g) => {
     const activations = getActivationResults(500, g.id);
@@ -325,9 +319,7 @@ export function getDashboard() {
     .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
     .slice(0, 15);
 
-  const recentGenerated = generated.slice(0, 15).map((r) => enrichResult(r, passwordMap));
   const readyActivate = listReadyAccounts('activate', passwordMap);
-  const readyGenerate = listReadyAccounts('generate', passwordMap);
 
   return {
     paidCount,
@@ -335,11 +327,9 @@ export function getDashboard() {
     accountsTotal,
     cpfsAvailable: cpfs.totalBlocks,
     cpfsTotalSlots: cpfs.totalSlots,
-    generatedToday,
     activatedToday,
+    activatedTotal: getGlobalActivatedTotal(),
     readyActivate,
-    readyGenerate,
-    recentGenerated,
     recentActivations,
     groups,
   };

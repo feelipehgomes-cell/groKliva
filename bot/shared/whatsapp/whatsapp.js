@@ -260,7 +260,9 @@ async function registerConfirmedPixForReactions({ copyPaste, waMessage, log, gro
       return;
     }
 
-    const backfill = collectReactionsForPixMessage(key);
+    const backfill = collectReactionsForPixMessage(key).filter(
+      (entry) => String(entry?.emoji || '').trim(),
+    );
     await registerConfirmedPixMessage(key, { backfillEntries: backfill });
     log?.info?.(
       `WhatsApp: PIX ${key.id} liberado para /count${backfill.length ? ` (${backfill.length} reacao(oes) existente(s))` : ''}.`,

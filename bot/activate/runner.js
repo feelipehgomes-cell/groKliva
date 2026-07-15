@@ -41,7 +41,7 @@ export function parseActivateArgs(argv) {
 }
 
 /**
- * Envia contas prontas do PIX no grupo (se WHATSAPP_SEND_READY_PIX_ON_STOP=true).
+ * Envia contas prontas do PIX no grupo (somente se o toggle do grupo estiver ativo).
  * Sempre pelo processo do bot (Baileys local) — a API do KLIVA falha com
  * "hub pausado" enquanto o ativador ainda esta rodando.
  * Envia somente contas desta run (nao o estoque acumulado).

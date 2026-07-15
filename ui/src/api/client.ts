@@ -13,8 +13,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   dashboard: () => request<any>('/api/dashboard'),
   botStatus: () => request<any>('/api/bots/status'),
-  startGenerate: (body: object) =>
-    request<any>('/api/bots/generate/start', { method: 'POST', body: JSON.stringify(body) }),
   startActivate: (body: object) =>
     request<any>('/api/bots/activate/start', { method: 'POST', body: JSON.stringify(body) }),
   stopActivate: (groupId: string) =>
@@ -22,8 +20,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ groupId }),
     }),
-  stopBot: (name: string) =>
-    request<any>(`/api/bots/${name}/stop`, { method: 'POST' }),
   groups: () => request<any>('/api/groups'),
   discoverGroups: () => request<any>('/api/groups/discover'),
   addGroup: (body: { id: string; label: string }) =>
@@ -71,7 +67,7 @@ export const api = {
   whatsappHubReconnect: () =>
     request<any>('/api/whatsapp/hub/reconnect', { method: 'POST', body: '{}' }),
   releaseReadyAccounts: (
-    kind: 'activate' | 'generate',
+    kind: 'activate',
     count: number | 'all',
     groupId?: string,
   ) =>

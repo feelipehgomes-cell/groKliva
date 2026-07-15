@@ -131,9 +131,22 @@ function bumpCount(counts, emoji, delta) {
 
 function messageTimestampMs(msg) {
   const raw = msg?.messageTimestamp ?? msg?.key?.timestamp ?? 0;
+  return normalizeReactionAtMs(raw);
+}
+
+/** Normaliza timestamp de reacao (segundos vs ms) para uso em agregacao e persistencia. */
+export function normalizeReactionAtMs(raw) {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return Date.now();
   return n < 1e12 ? n * 1000 : n;
+}
+
+export function recomputeCountsFromMessages(messages = {}) {
+  const counts = {};
+  for (const emoji of Object.values(messages)) {
+    bumpCount(counts, normalizeReactionEmoji(emoji), 1);
+  }
+  return counts;
 }
 
 /**
@@ -150,7 +163,7 @@ export function aggregateReactionEntries(entries, { date = new Date(), confirmed
     if (!waId || !emoji) continue;
     if (confirmedWaIds && !confirmedWaIds.has(waId)) continue;
 
-    const at = entry.at ?? Date.now();
+    const at = normalizeReactionAtMs(entry.at);
     if (at < todayStart) continue;
 
     const prev = perMessage.get(waId);
@@ -192,7 +205,7 @@ export function recordMessageReaction({ emoji, messageKey, at } = {}) {
   const waId = waMessageId(messageKey);
   if (!waId) return chain;
 
-  const when = at ?? Date.now();
+  const when = normalizeReactionAtMs(at);
   const dateKey = localDateKey(new Date(when));
 
   chain = chain.then(() => {
@@ -222,6 +235,7 @@ export function registerConfirmedPixMessage(messageKey, { backfillEntries = [], 
     day.confirmedPix[storeId] = when;
 
     for (const entry of backfillEntries) {
+      if (!normalizeReactionEmoji(entry?.emoji)) continue;
       applyReactionToDay(day, entry);
     }
 
@@ -283,11 +297,15 @@ export function getTodayReactionCounts(date = new Date()) {
   };
 }
 
-export function formatReactionReport({ dateKey, counts, total } = {}) {
+export function formatReactionReport({ dateKey, counts, total, confirmedPixCount } = {}) {
   const displayDate = formatDisplayDate(dateKey || localDateKey());
 
   if (!total) {
-    return `📊 Reações de hoje (${displayDate})\n\nNenhuma reação em PIX confirmado ainda.`;
+    const pixHint =
+      confirmedPixCount > 0
+        ? `\n\n${confirmedPixCount} PIX pago(s) hoje — reaja nas mensagens do QR para contar.`
+        : '';
+    return `📊 Reações de hoje (${displayDate})\n\nNenhuma reação em PIX confirmado ainda.${pixHint}`;
   }
 
   const lines = Object.entries(counts || {})
@@ -326,7 +344,7 @@ export function extractReactionFromEvent({ key, reaction } = {}) {
   return {
     messageKey: key,
     emoji: reaction?.text,
-    at: Number(reaction?.senderTimestampMs) || Date.now(),
+    at: normalizeReactionAtMs(reaction?.senderTimestampMs),
     reactorKey: reaction?.key,
   };
 }

@@ -3,7 +3,6 @@ import {
   listAccounts,
   addAccountsFromText,
   deleteAccount,
-  getGeneratedResults,
   getActivationResults,
 } from '../services/dataStore.js';
 
@@ -34,10 +33,6 @@ router.delete('/:email', async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
-});
-
-router.get('/generated', (_req, res) => {
-  res.json(getGeneratedResults());
 });
 
 router.get('/results', (req, res) => {

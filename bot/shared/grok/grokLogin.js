@@ -35,7 +35,7 @@ import {
   isLoggedInUrl,
 } from '../browser/pageHelpers.js';
 import { effectiveLoginPostSubmitMs, effectiveLoginPollMs, effectiveLoginSelectorTimeout, effectiveNavTimeout, isProxyActive, isConnectionError } from '../proxy/proxy.js';
-import { isTrialOfferAvailable } from './grokSignup.js';
+import { isTrialOfferAvailable } from './grokTrial.js';
 
 /**
  * Executa o fluxo de login em uma conta Grok ja existente.
@@ -373,10 +373,11 @@ async function clickLoginEnterFast(page, sel, log) {
 
 /** Poll rapido: assim que Turnstile = Sucesso, clica Entrar. */
 async function submitLoginWhenTurnstileReady(page, sel, log, { proxy, maxWaitMs, account } = {}) {
-  maxWaitMs = maxWaitMs ?? (isProxyActive() ? 22000 : 18000);
+  const postSubmitMs = effectiveLoginPostSubmitMs();
+  maxWaitMs = maxWaitMs ?? (isProxyActive() ? postSubmitMs + 10000 : 18000);
   const start = Date.now();
   let enterClicks = 0;
-  const maxClicks = 4;
+  const maxClicks = isProxyActive() ? 2 : 4;
 
   while (Date.now() - start < maxWaitMs) {
     if (await turnstileFailed(page)) return false;
@@ -388,17 +389,20 @@ async function submitLoginWhenTurnstileReady(page, sel, log, { proxy, maxWaitMs,
     if (turnstileOk || !captchaPresent) {
       if (enterClicks < maxClicks) {
         if (enterClicks === 0) log.info('Turnstile ok — clicando Entrar.');
+        else log.info('Turnstile ok — reenviando Entrar (proxy lenta).');
         await clickLoginEnterFast(page, sel, log);
         enterClicks += 1;
       }
 
       const remaining = maxWaitMs - (Date.now() - start);
+      // Com proxy o POST de auth pode levar 30-90s — antes capava em 5s e desistia com spinner ativo.
+      const pollCap = isProxyActive() ? postSubmitMs : 3500;
       if (
         await pollLoginAfterSubmit(page, {
           log,
           proxy,
           clickSubmit: () => clickLoginEnterFast(page, sel, log),
-          maxMs: Math.min(isProxyActive() ? 5000 : 3500, remaining),
+          maxMs: Math.min(Math.max(pollCap, isProxyActive() ? 20000 : 3500), remaining),
           accountEmail: account?.email,
           emailSelector: sel.emailInput,
         })
@@ -407,11 +411,17 @@ async function submitLoginWhenTurnstileReady(page, sel, log, { proxy, maxWaitMs,
       }
 
       if (await isLoggedInSafe(page)) return true;
+
+      if (isProxyActive() && (await isLoginSubmitPending(page))) {
+        log.debug('Submit em andamento (proxy) — aguardando redirect...');
+        await sleep(Math.min(1500, remaining));
+        continue;
+      }
     } else if (enterClicks === 0 && Date.now() - start > 800) {
       await maybeSolveTurnstile(page, { proxy, log }, 'aguardando captcha', { waitMs: 250 });
     }
 
-    await sleep(35);
+    await sleep(isProxyActive() ? 80 : 35);
   }
 
   return false;
@@ -592,8 +602,8 @@ async function pollLoginAfterSubmit(page, { log, proxy, clickSubmit, maxMs, acco
   let stuckResubmits = 0;
   let loadingSince = null;
   let stuckSince = null;
-  const loadingResubmitMs = proxyOn ? 35000 : 30000;
-  const stuckResubmitMs = proxyOn ? 4000 : 6000;
+  const loadingResubmitMs = proxyOn ? 60000 : 30000;
+  const stuckResubmitMs = proxyOn ? 8000 : 6000;
   const pollMs = effectiveLoginPollMs();
   const maxStuckResubmits = 4;
 

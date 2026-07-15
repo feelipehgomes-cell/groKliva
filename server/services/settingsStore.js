@@ -4,18 +4,11 @@ import { ROOT_DIR } from "../../bot/shared/config.js";
 
 const ENV_PATH = path.join(ROOT_DIR, ".env");
 
-export const WHATSAPP_GROUPS = [
-  { id: "120363428198374994@g.us", label: "grok kliva" },
-  { id: "120363428345968335@g.us", label: "ESCANEAR KLIVA" },
-  { id: "120363412599585849@g.us", label: "GROK LUCAS" },
-];
-
 export const SETTINGS_SCHEMA = {
   proxy: {
     label: "Proxy",
     fields: [
       { key: "PROXY_URL", type: "text", label: "URL da proxy" },
-      { key: "GENERATE_USE_PROXY", type: "boolean", label: "Proxy no gerador" },
       { key: "PIX_USE_PROXY", type: "boolean", label: "Proxy na ativacao PIX" },
       { key: "PROXY_STICKY", type: "boolean", label: "Sessao sticky" },
     ],
@@ -49,33 +42,6 @@ export const SETTINGS_SCHEMA = {
         type: "number",
         label: "Stagger minimo com proxy (ms)",
       },
-    ],
-  },
-  generate: {
-    label: "Gerador",
-    fields: [
-      { key: "GENERATE_COUNT", type: "number", label: "Contas por execucao" },
-      {
-        key: "SIGNUP_PASSWORD",
-        type: "password",
-        label: "Senha das contas geradas",
-      },
-      {
-        key: "GENERATOR_EMAIL_DOMAIN",
-        type: "text",
-        label: "Dominio fixo (opcional)",
-      },
-      {
-        key: "GENERATOR_EMAIL_USE_DEFAULT_DOMAINS",
-        type: "boolean",
-        label: "Usar lista de dominios",
-      },
-      {
-        key: "GENERATOR_EMAIL_DOMAINS",
-        type: "text",
-        label: "Dominios (virgula)",
-      },
-      { key: "EMAIL_TIMEOUT_MS", type: "number", label: "Timeout email (ms)" },
     ],
   },
   pix: {
@@ -129,7 +95,7 @@ export const SETTINGS_SCHEMA = {
       {
         key: "WHATSAPP_SEND_READY_PIX_ON_STOP",
         type: "boolean",
-        label: "Enviar contas prontas (PIX) no grupo ao parar",
+        label: "Enviar contas prontas ao parar (só CLI; na UI use o toggle do grupo)",
       },
       {
         key: "WHATSAPP_COMMANDS_ENABLED",

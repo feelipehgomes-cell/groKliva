@@ -66,10 +66,8 @@ async function fetchKliva(path, options = {}) {
 }
 
 function formatKlivaStatus(data, groupJid) {
-  const generate = data?.bots?.generate?.running ? '🟢 rodando' : '⚪ parado';
   const cpfSlots = data?.cpfsTotalSlots ?? 0;
   const cpfBlocks = data?.cpfsAvailable ?? 0;
-  const readyGen = data?.readyGenerate?.length ?? 0;
 
   const group = (data?.groups || []).find((g) => g.id === groupJid);
   const lines = ['📊 Status grokPix', ''];
@@ -83,11 +81,7 @@ function formatKlivaStatus(data, groupJid) {
     lines.push('');
   }
 
-  lines.push(`🧪 Gerador: ${generate}`);
   lines.push(`🪪 CPFs disponíveis: ${cpfSlots} vagas (${cpfBlocks} CPFs)`);
-  if (readyGen > 0) {
-    lines.push(`📦 Geradas p/ copiar: ${readyGen}`);
-  }
 
   return lines.join('\n');
 }
@@ -134,6 +128,16 @@ export async function handleServerWhatsAppCommand(
       await replyToCommand(sock, groupJid, msg, '⚠️ Bot PIX ja esta rodando neste grupo.', log);
       return;
     }
+    if (status?.runningGroupId && status.runningGroupId !== groupJid) {
+      await replyToCommand(
+        sock,
+        groupJid,
+        msg,
+        '⚠️ Bot PIX ja esta rodando em outro grupo. Use /stop la antes de iniciar aqui.',
+        log,
+      );
+      return;
+    }
 
     await fetchKliva('/api/bots/activate/start', {
       method: 'POST',
@@ -151,24 +155,18 @@ export async function handleServerWhatsAppCommand(
   if (command.name === 'stop') {
     const status = await fetchKliva('/api/bots/status');
     const groupRunning = isGroupActivateRunning(status, groupJid);
-    const generateRunning = status?.bots?.generate?.running || status?.generate?.running;
 
-    if (!groupRunning && !generateRunning) {
+    if (!groupRunning) {
       await replyToCommand(sock, groupJid, msg, '⚪ Nenhum bot esta rodando.', log);
       return;
     }
 
     await replyToCommand(sock, groupJid, msg, '⏹ Parando bot...', log);
 
-    if (groupRunning) {
-      await fetchKliva('/api/bots/activate/stop', {
-        method: 'POST',
-        body: JSON.stringify({ groupId: groupJid }),
-      });
-    }
-    if (generateRunning) {
-      await fetchKliva('/api/bots/generate/stop', { method: 'POST' });
-    }
+    await fetchKliva('/api/bots/activate/stop', {
+      method: 'POST',
+      body: JSON.stringify({ groupId: groupJid }),
+    });
     log?.info?.(`WhatsApp: /stop -> bots parados (${groupJid}).`);
     return;
   }

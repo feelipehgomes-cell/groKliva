@@ -15,7 +15,7 @@ function BotCard({
   otherRunning,
   logGroupId,
 }: {
-  name: 'generate' | 'activate';
+  name: 'activate';
   title: string;
   description: string;
   fields: React.ReactNode;
@@ -34,7 +34,7 @@ function BotCard({
       (entry) => {
         setLogs((prev) => [...prev.slice(-499), entry]);
       },
-      name === 'activate' ? logGroupId : undefined,
+      logGroupId,
     );
     return disconnect;
   }, [name, logGroupId]);
@@ -102,9 +102,10 @@ function BotCard({
 
 export function BotsPage() {
   const [status, setStatus] = useState<any>(null);
-  const [groups, setGroups] = useState<{ id: string; label: string }[]>([]);
+  const [groups, setGroups] = useState<
+    { id: string; label: string; sendReadyPix?: boolean }[]
+  >([]);
   const [activateGroupId, setActivateGroupId] = useState('');
-  const [generateOpts, setGenerateOpts] = useState(() => botPrefs.loadGenerate());
   const [activateOpts, setActivateOpts] = useState(() => botPrefs.loadActivate());
   const [sendReadyPixWa, setSendReadyPixWa] = useState(false);
 
@@ -118,18 +119,26 @@ export function BotsPage() {
 
   useEffect(() => {
     api.groups().then((res) => {
-      const list = (res.groups || []).map((g: any) => ({ id: g.id, label: g.label }));
+      const list = (res.groups || []).map((g: any) => ({
+        id: g.id,
+        label: g.label,
+        sendReadyPix: g.sendReadyPix === true,
+      }));
       setGroups(list);
       if (list.length && !activateGroupId) setActivateGroupId(list[0].id);
     });
   }, [activateGroupId]);
 
   useEffect(() => {
+    const selected = groups.find((g) => g.id === activateGroupId);
+    if (selected) setSendReadyPixWa(selected.sendReadyPix === true);
+  }, [activateGroupId, groups]);
+
+  useEffect(() => {
     api
       .settings()
       .then((data) => {
         const pixFields = data?.groups?.pix?.fields || [];
-        const waFields = data?.groups?.whatsapp?.fields || [];
 
         const limitField = pixFields.find((f: any) => f.key === 'ACTIVATE_ACCOUNT_LIMIT');
         if (limitField) {
@@ -138,16 +147,6 @@ export function BotsPage() {
             setActivateOpts((prev) => ({ ...prev, limit: n }));
           }
         }
-
-        const sendField = waFields.find(
-          (f: any) =>
-            f.key === 'WHATSAPP_SEND_READY_PIX_ON_STOP' ||
-            f.key === 'WHATSAPP_SEND_GENERATED_ON_STOP',
-        );
-        if (sendField) {
-          const raw = String(sendField.value || 'false').trim().toLowerCase();
-          setSendReadyPixWa(['1', 'true', 'yes', 'y', 'on'].includes(raw));
-        }
       })
       .catch(console.error);
   }, []);
@@ -155,10 +154,6 @@ export function BotsPage() {
   useEffect(() => {
     botPrefs.saveActivate(activateOpts);
   }, [activateOpts]);
-
-  useEffect(() => {
-    botPrefs.saveGenerate(generateOpts);
-  }, [generateOpts]);
 
   const concSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -185,21 +180,32 @@ export function BotsPage() {
   };
 
   const saveSendReadyPixWa = (enabled: boolean) => {
+    if (!activateGroupId) {
+      alert('Selecione um grupo');
+      return;
+    }
     setSendReadyPixWa(enabled);
-    api
-      .saveSettings({ WHATSAPP_SEND_READY_PIX_ON_STOP: enabled ? 'true' : 'false' })
-      .catch((err) => {
-        console.error(err);
-        setSendReadyPixWa(!enabled);
-        alert(err.message || 'Falha ao salvar');
-      });
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.id === activateGroupId ? { ...g, sendReadyPix: enabled } : g,
+      ),
+    );
+    api.setGroupSendReadyPix(activateGroupId, enabled).catch((err) => {
+      console.error(err);
+      setSendReadyPixWa(!enabled);
+      setGroups((prev) =>
+        prev.map((g) =>
+          g.id === activateGroupId ? { ...g, sendReadyPix: !enabled } : g,
+        ),
+      );
+      alert(err.message || 'Falha ao salvar');
+    });
   };
 
-  const generateRunning = status?.generate?.running;
   const activateMap = status?.activate || {};
   const selectedActivate = activateGroupId ? activateMap[activateGroupId] : null;
   const activateRunning = !!selectedActivate?.running;
-  const anyActivateRunning = status?.anyActivateRunning || Object.values(activateMap).some((s: any) => s?.running);
+  const anyActivateRunning = !!status?.anyActivateRunning;
 
   useEffect(() => {
     const opts = selectedActivate?.startOptions;
@@ -209,15 +215,6 @@ export function BotsPage() {
       limit: opts.limit ?? prev.limit,
     }));
   }, [activateRunning, selectedActivate?.startOptions]);
-
-  useEffect(() => {
-    const opts = status?.generate?.startOptions;
-    if (!status?.generate?.running || !opts) return;
-    setGenerateOpts((prev) => ({
-      ...prev,
-      count: opts.count ?? prev.count,
-    }));
-  }, [status?.generate?.running, status?.generate?.startOptions]);
 
   return (
     <>
@@ -234,7 +231,7 @@ export function BotsPage() {
           title="Ativar via PIX"
           description="Login + trial PIX + WhatsApp + espera pagamento"
           status={selectedActivate || { running: false }}
-          otherRunning={false}
+          otherRunning={anyActivateRunning && !activateRunning}
           logGroupId={activateGroupId}
           onStart={async () => {
             if (!activateGroupId) {
@@ -292,15 +289,15 @@ export function BotsPage() {
                 />
               </div>
               <div className="form-row">
-                <label>Enviar só contas desta run no WhatsApp ao parar</label>
+                <label>Enviar contas prontas no grupo ao parar</label>
                 <select
                   className="select"
                   value={sendReadyPixWa ? 'true' : 'false'}
                   onChange={(e) => saveSendReadyPixWa(e.target.value === 'true')}
-                  disabled={activateRunning}
+                  disabled={activateRunning || !activateGroupId}
                 >
-                  <option value="true">Sim</option>
-                  <option value="false">Não</option>
+                  <option value="true">Sim (no grupo)</option>
+                  <option value="false">Não (só no painel)</option>
                 </select>
               </div>
               <ConcurrencySlider
@@ -310,54 +307,6 @@ export function BotsPage() {
                   scheduleConcurrencySave(concurrency);
                 }}
                 disabled={activateRunning}
-              />
-            </>
-          }
-        />
-
-        <BotCard
-          name="generate"
-          title="Gerar contas"
-          description="Cria contas novas no x.ai via generator.email"
-          status={status?.generate}
-          otherRunning={anyActivateRunning}
-          onStart={async () => {
-            try {
-              await persistConcurrency(generateOpts.concurrency);
-              await api.startGenerate(generateOpts);
-              refresh();
-            } catch (e: any) {
-              alert(e.message);
-            }
-          }}
-          onStop={() =>
-            api
-              .stopBot('generate')
-              .then(refresh)
-              .catch((e) => alert(e.message))
-          }
-          fields={
-            <>
-              <div className="form-row">
-                <label>Quantidade</label>
-                <input
-                  className="input"
-                  type="number"
-                  min={1}
-                  value={generateOpts.count}
-                  onChange={(e) =>
-                    setGenerateOpts({ ...generateOpts, count: +e.target.value })
-                  }
-                  disabled={generateRunning}
-                />
-              </div>
-              <ConcurrencySlider
-                value={generateOpts.concurrency}
-                onChange={(concurrency) => {
-                  setGenerateOpts((prev) => ({ ...prev, concurrency }));
-                  scheduleConcurrencySave(concurrency);
-                }}
-                disabled={generateRunning}
               />
             </>
           }

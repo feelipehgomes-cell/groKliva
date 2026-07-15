@@ -3,6 +3,7 @@ import path from 'node:path';
 import { ROOT_DIR } from '../../bot/shared/config.js';
 
 const STATS_FILE = path.join(ROOT_DIR, 'data', 'group-stats.json');
+const GLOBAL_STATS_FILE = path.join(ROOT_DIR, 'data', 'global-stats.json');
 
 function readStats() {
   if (!fs.existsSync(STATS_FILE)) return {};
@@ -17,6 +18,33 @@ function readStats() {
 function writeStats(stats) {
   fs.mkdirSync(path.dirname(STATS_FILE), { recursive: true });
   fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2), 'utf8');
+}
+
+function readGlobalStats() {
+  if (!fs.existsSync(GLOBAL_STATS_FILE)) return { activatedTotal: 0 };
+  try {
+    const data = JSON.parse(fs.readFileSync(GLOBAL_STATS_FILE, 'utf8'));
+    const total = Number(data?.activatedTotal);
+    return { activatedTotal: Number.isFinite(total) && total >= 0 ? total : 0 };
+  } catch {
+    return { activatedTotal: 0 };
+  }
+}
+
+function writeGlobalStats(stats) {
+  fs.mkdirSync(path.dirname(GLOBAL_STATS_FILE), { recursive: true });
+  fs.writeFileSync(GLOBAL_STATS_FILE, JSON.stringify(stats, null, 2), 'utf8');
+}
+
+export function getGlobalActivatedTotal() {
+  return readGlobalStats().activatedTotal || 0;
+}
+
+export function incrementGlobalActivatedTotal(amount = 1) {
+  const stats = readGlobalStats();
+  stats.activatedTotal = Math.max(0, (stats.activatedTotal || 0) + amount);
+  writeGlobalStats(stats);
+  return stats.activatedTotal;
 }
 
 function defaultEntry() {
@@ -41,6 +69,7 @@ export function incrementActivatedCount(groupId, amount = 1) {
   entry.activatedCount = Math.max(0, (entry.activatedCount || 0) + amount);
   stats[id] = entry;
   writeStats(stats);
+  if (amount > 0) incrementGlobalActivatedTotal(amount);
   return entry;
 }
 

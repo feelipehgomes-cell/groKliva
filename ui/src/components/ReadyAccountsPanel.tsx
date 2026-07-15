@@ -14,7 +14,7 @@ const COPY_LIMITS = [
 ] as const;
 
 type ReadyAccountsPanelProps = {
-  kind: 'activate' | 'generate';
+  kind: 'activate';
   accounts: ReadyAccount[];
   accountsLabel: string;
   onReleased: () => void;
@@ -46,7 +46,7 @@ export function ReadyAccountsPanel({
       const res = await api.releaseReadyAccounts(
         kind,
         count,
-        kind === 'activate' ? groupId : undefined,
+        kind === 'activate' && groupId && groupId !== 'all' ? groupId : undefined,
       );
       await navigator.clipboard.writeText(res.text);
       setMessage(`${res.copied} copiada(s)`);
@@ -79,6 +79,7 @@ export function ReadyAccountsPanel({
                 disabled={copying}
                 aria-label="Grupo das contas prontas"
               >
+                <option value="all">Todas</option>
                 {groups.map((g) => (
                   <option key={g.id} value={g.id}>
                     {g.label}

@@ -14,7 +14,7 @@ router.get('/', (_req, res) => {
 router.post('/release-accounts', (req, res) => {
   try {
     const { kind, count, groupId } = req.body || {};
-    if (!['activate', 'generate'].includes(kind)) {
+    if (!['activate'].includes(kind)) {
       return res.status(400).json({ ok: false, error: 'kind invalido' });
     }
     const parsed =

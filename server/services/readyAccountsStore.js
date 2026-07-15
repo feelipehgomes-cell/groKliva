@@ -21,10 +21,6 @@ function readJsonArray(filePath) {
   }
 }
 
-function getGeneratedResults(limit = 2000) {
-  return readJsonArray(config.generatedResultsFile).slice(-limit).reverse();
-}
-
 function backupDirForGroup(groupSlug) {
   if (groupSlug) {
     return resolveGroupPaths(groupSlug).readyBackupDir;
@@ -104,11 +100,29 @@ function buildActivatePool(passwordMap) {
 
 function buildActivatePoolForGroup(groupSlug, passwordMap) {
   const paths = resolveGroupPaths(groupSlug);
-  const results = readJsonArray(paths.resultsFile);
+  const group = listGroups().find((g) => g.slug === groupSlug) || null;
+  const groupResults = readJsonArray(paths.resultsFile);
+  // Fallback: results antigos gravados no arquivo global (bug de path/dotenv)
+  const globalResults = group?.id
+    ? readJsonArray(config.resultsFile).filter(
+        (r) => String(r?.groupId || '') === group.id,
+      )
+    : [];
+
+  const byEmail = new Map();
+  for (const r of [...globalResults, ...groupResults]) {
+    const key = String(r?.email || '')
+      .trim()
+      .toLowerCase();
+    if (key) byEmail.set(key, r);
+  }
+
   const seen = new Set();
   const accounts = [];
-
-  for (const r of [...results].reverse()) {
+  const ordered = [...byEmail.values()].sort((a, b) =>
+    String(b.at || '').localeCompare(String(a.at || '')),
+  );
+  for (const r of ordered) {
     if (r?.paymentConfirmed !== true || !r?.email) continue;
     const email = String(r.email).trim().toLowerCase();
     if (!email || seen.has(email)) continue;
@@ -125,38 +139,21 @@ function buildActivatePoolForGroup(groupSlug, passwordMap) {
   return accounts;
 }
 
-function buildGeneratePool(passwordMap) {
-  const seen = new Set();
-  const accounts = [];
-  const results = getGeneratedResults(2000).slice().reverse();
-
-  for (const r of results) {
-    if (!r.ok) continue;
-    const email = String(r.email || '').toLowerCase();
-    if (!email || seen.has(email)) continue;
-    const password = r.password || passwordMap.get(email) || '';
-    if (!password) continue;
-    seen.add(email);
-    accounts.push({
-      email: r.email,
-      password,
-      credential: credentialLine(r.email, password),
-    });
-  }
-  return accounts;
-}
-
 function poolForKind(kind, passwordMap, groupSlug = null) {
   if (kind === 'activate') {
     if (groupSlug) return buildActivatePoolForGroup(groupSlug, passwordMap);
     return buildActivatePool(passwordMap);
   }
-  if (kind === 'generate') return buildGeneratePool(passwordMap);
   throw new Error(`Tipo invalido: ${kind}`);
 }
 
 export function listReadyAccounts(kind, passwordMap, groupSlug = null) {
   const released = loadReleased(kind, groupSlug);
+  if (groupSlug) {
+    // Released global funciona como filtro-mestre: contas liberadas na visao "Todas"
+    // tambem somem da visao por grupo.
+    for (const email of loadReleased(kind, null)) released.add(email);
+  }
   return poolForKind(kind, passwordMap, groupSlug).filter(
     (a) => !released.has(a.email.toLowerCase()),
   );
@@ -223,6 +220,13 @@ export function releaseReadyAccounts(kind, count = 0, passwordMap, groupSlug = n
   for (const a of batch) released.add(a.email.toLowerCase());
   saveReleased(kind, released, groupSlug);
 
+  // Mantem o released global sincronizado para a visao "Todas".
+  if (groupSlug) {
+    const globalReleased = loadReleased(kind, null);
+    for (const a of batch) globalReleased.add(a.email.toLowerCase());
+    saveReleased(kind, globalReleased, null);
+  }
+
   return {
     text: batch.map((a) => a.credential).join('\n'),
     copied: batch.length,
@@ -263,6 +267,12 @@ export function markReadyAccountsReleased(kind, emails = [], passwordMap, groupS
   appendToBackup(batch, groupSlug);
   for (const a of batch) released.add(a.email.toLowerCase());
   saveReleased(kind, released, groupSlug);
+
+  if (groupSlug) {
+    const globalReleased = loadReleased(kind, null);
+    for (const a of batch) globalReleased.add(a.email.toLowerCase());
+    saveReleased(kind, globalReleased, null);
+  }
 
   return {
     released: batch.length,

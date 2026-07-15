@@ -26,7 +26,7 @@ const log = createLogger('probe-trial-pages');
 
 function parseArgs(argv) {
   const email = argv[2];
-  const password = argv[3] || config.signupPassword;
+  const password = argv[3] || '';
   return { email, password };
 }
 

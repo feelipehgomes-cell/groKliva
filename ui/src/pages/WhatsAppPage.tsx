@@ -332,7 +332,7 @@ export function WhatsAppPage() {
             />
           </div>
           <div className="form-row">
-            <label>Enviar contas prontas ao parar bot</label>
+            <label>Enviar contas prontas ao parar (só CLI)</label>
             <SwitchToggle
               checked={settings.WHATSAPP_SEND_READY_PIX_ON_STOP === 'true'}
               onChange={() =>
@@ -344,6 +344,9 @@ export function WhatsAppPage() {
               }
               label={settings.WHATSAPP_SEND_READY_PIX_ON_STOP === 'true' ? 'Sim' : 'Não'}
             />
+            <small style={{ color: 'var(--text-muted)' }}>
+              Na interface KLIVA, use o toggle &quot;Enviar prontas&quot; em cada grupo.
+            </small>
           </div>
           <div className="form-row" style={{ gridColumn: '1 / -1' }}>
             <label>Telefones admin (DDI+DDD+número, vírgula)</label>

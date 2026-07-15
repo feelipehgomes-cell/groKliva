@@ -441,7 +441,7 @@ export async function setupPage(browser, { proxy, log, prefetchUrl } = {}) {
 function proxyAllowHeavyResource(url = '') {
   return (
     /challenges\.cloudflare\.com|turnstile|cloudflare\.com\/cdn-cgi/i.test(url) ||
-    /accounts\.x\.ai/i.test(url) ||
+    /accounts\.x\.ai|\.x\.ai/i.test(url) ||
     /checkout\.stripe\.com|js\.stripe\.com|stripe\.network/i.test(url)
   );
 }

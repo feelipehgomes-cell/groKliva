@@ -7,15 +7,6 @@ router.get('/status', (_req, res) => {
   res.json(botManager.getStatus());
 });
 
-router.post('/generate/start', async (req, res) => {
-  try {
-    const result = await botManager.start('generate', req.body || {});
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
 router.post('/activate/start', async (req, res) => {
   try {
     const result = await botManager.start('activate', req.body || {});
@@ -28,34 +19,6 @@ router.post('/activate/start', async (req, res) => {
 router.post('/activate/stop', async (req, res) => {
   try {
     const result = await botManager.stop('activate', req.body || {});
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-router.post('/generate/stop', async (req, res) => {
-  try {
-    const result = await botManager.stop('generate');
-    res.json({ ok: true, ...result });
-  } catch (err) {
-    res.status(400).json({ ok: false, error: err.message });
-  }
-});
-
-router.post('/:name/stop', async (req, res) => {
-  const { name } = req.params;
-  if (name === 'activate') {
-    return res.status(400).json({
-      ok: false,
-      error: 'Use POST /api/bots/activate/stop com { groupId }',
-    });
-  }
-  if (!['generate'].includes(name)) {
-    return res.status(404).json({ ok: false, error: 'Bot nao encontrado' });
-  }
-  try {
-    const result = await botManager.stop(name);
     res.json({ ok: true, ...result });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
@@ -89,14 +52,6 @@ function streamLogs(req, res, botName, groupId = null) {
 router.get('/activate/:groupId/logs', (req, res) => {
   const groupId = decodeURIComponent(req.params.groupId);
   streamLogs(req, res, 'activate', groupId);
-});
-
-router.get('/:name/logs', (req, res) => {
-  const { name } = req.params;
-  if (!['generate'].includes(name)) {
-    return res.status(404).json({ ok: false, error: 'Bot nao encontrado' });
-  }
-  streamLogs(req, res, name);
 });
 
 export default router;

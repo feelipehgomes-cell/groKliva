@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { ROOT_DIR } from '../../bot/shared/config.js';
@@ -8,35 +9,63 @@ import { getGroupById, ensureGroupDirs, groupSendReadyPixEnabled } from './group
 import { getPaidEmails } from '../../bot/shared/pix/paidStore.js';
 
 const BOT_CONFIG = {
-  generate: {
-    script: path.join(ROOT_DIR, 'bot/generate/cli.js'),
-    label: 'Gerar contas',
-  },
   activate: {
     script: path.join(ROOT_DIR, 'bot/activate/cli.js'),
     label: 'Ativar via PIX',
   },
 };
 
-function envTruthy(raw) {
-  if (raw === undefined || raw === null || raw === '') return false;
-  return ['1', 'true', 'yes', 'y', 'on'].includes(String(raw).trim().toLowerCase());
+function sendReadyPixOnStopForGroup(group) {
+  return group?.sendReadyPix === true;
 }
 
-function sendReadyPixOnStopForGroup(group) {
-  if (group?.sendReadyPix === true) return true;
-  return envTruthy(getEnvMap().WHATSAPP_SEND_READY_PIX_ON_STOP);
+// Lock em disco para sobreviver a restart do servidor (ex.: --watch em dev, crash em prod).
+// O mapa em memoria e recriado a cada restart, mas os processos filhos (activate + Chrome)
+// continuam vivos; o lock rastreia o run pelo PID para manter a exclusao global (um por vez).
+const ACTIVATE_LOCK_FILE = path.join(ROOT_DIR, 'data', 'activate.lock');
+
+function isPidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+function readActivateLock() {
+  try {
+    return JSON.parse(fs.readFileSync(ACTIVATE_LOCK_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeActivateLock(data) {
+  try {
+    fs.mkdirSync(path.dirname(ACTIVATE_LOCK_FILE), { recursive: true });
+    fs.writeFileSync(ACTIVATE_LOCK_FILE, JSON.stringify(data), 'utf8');
+  } catch {
+    /* noop */
+  }
+}
+
+function clearActivateLock() {
+  try {
+    fs.rmSync(ACTIVATE_LOCK_FILE, { force: true });
+  } catch {
+    /* noop */
+  }
 }
 
 class BotManager extends EventEmitter {
   constructor() {
     super();
     this.processes = {
-      generate: null,
       activate: new Map(),
     };
     this.logBuffers = {
-      generate: [],
       activate: new Map(),
     };
     this.maxLogLines = 500;
@@ -44,7 +73,31 @@ class BotManager extends EventEmitter {
 
   isActivateRunning(groupId) {
     const proc = this.processes.activate.get(groupId);
-    return !!proc && !proc.killed;
+    if (proc && !proc.killed) return true;
+    const lock = readActivateLock();
+    return !!(lock && lock.groupId === groupId && isPidAlive(lock.pid));
+  }
+
+  /** Retorna o ativador em execucao (unico permitido globalmente) ou null. */
+  getRunningActivate() {
+    for (const [groupId, proc] of this.processes.activate.entries()) {
+      if (proc && !proc.killed) {
+        return { groupId, proc, group: getGroupById(groupId), pid: proc.pid };
+      }
+    }
+    // Sem handle em memoria: pode ser um run orfao apos restart do servidor.
+    const lock = readActivateLock();
+    if (lock?.pid && isPidAlive(lock.pid)) {
+      return {
+        groupId: lock.groupId,
+        proc: null,
+        group: getGroupById(lock.groupId),
+        pid: lock.pid,
+        orphaned: true,
+      };
+    }
+    if (lock) clearActivateLock();
+    return null;
   }
 
   getActivateStatus() {
@@ -59,29 +112,33 @@ class BotManager extends EventEmitter {
         label: BOT_CONFIG.activate.label,
       };
     }
+    // Inclui run orfao (rastreado so pelo lock) para a UI/comandos refletirem a exclusao.
+    const lock = readActivateLock();
+    if (lock?.pid && isPidAlive(lock.pid) && !out[lock.groupId]) {
+      out[lock.groupId] = {
+        running: true,
+        pid: lock.pid,
+        startedAt: lock.startedAt ?? null,
+        startOptions: null,
+        groupId: lock.groupId,
+        label: BOT_CONFIG.activate.label,
+        orphaned: true,
+      };
+    }
     return out;
   }
 
   getStatus() {
-    const generateProc = this.processes.generate;
     const activateMap = this.getActivateStatus();
     const anyActivateRunning = Object.values(activateMap).some((s) => s.running);
+    const runningGroupId = this.getRunningActivate()?.groupId ?? null;
 
-    const status = {
-      generate: {
-        running: !!generateProc && !generateProc.killed,
-        pid: generateProc?.pid ?? null,
-        startedAt: generateProc?.startedAt ?? null,
-        startOptions: generateProc?.startOptions ?? null,
-        label: BOT_CONFIG.generate.label,
-      },
+    return {
       activate: activateMap,
-      anyRunning:
-        (!!generateProc && !generateProc.killed) || anyActivateRunning,
+      anyRunning: anyActivateRunning,
       anyActivateRunning,
+      runningGroupId,
     };
-
-    return status;
   }
 
   getLogs(name, since = 0, groupId = null) {
@@ -90,8 +147,7 @@ class BotManager extends EventEmitter {
       const buf = this.logBuffers.activate.get(groupId) || [];
       return buf.slice(since);
     }
-    const buf = this.logBuffers[name] || [];
-    return buf.slice(since);
+    return [];
   }
 
   appendLog(name, line, stream = 'stdout', groupId = null) {
@@ -106,12 +162,7 @@ class BotManager extends EventEmitter {
       buf.push(entry);
       if (buf.length > this.maxLogLines) buf.splice(0, buf.length - this.maxLogLines);
       this.emit('log', name, entry, groupId);
-      return;
     }
-    const buf = this.logBuffers[name];
-    buf.push(entry);
-    if (buf.length > this.maxLogLines) buf.splice(0, buf.length - this.maxLogLines);
-    this.emit('log', name, entry);
   }
 
   clearLogs(name, groupId = null) {
@@ -121,9 +172,7 @@ class BotManager extends EventEmitter {
     }
     if (name === 'activate') {
       this.logBuffers.activate.clear();
-      return;
     }
-    this.logBuffers[name] = [];
   }
 
   resolveConcurrency(options = {}) {
@@ -147,12 +196,6 @@ class BotManager extends EventEmitter {
   async start(name, options = {}) {
     if (!BOT_CONFIG[name]) throw new Error(`Bot desconhecido: ${name}`);
 
-    if (name === 'generate') {
-      if (this.processes.generate && !this.processes.generate.killed) {
-        throw new Error(`${BOT_CONFIG[name].label} ja esta rodando`);
-      }
-    }
-
     if (name === 'activate') {
       const groupId = String(options.groupId || '').trim();
       if (!groupId) throw new Error('groupId obrigatorio para iniciar o ativador');
@@ -161,8 +204,15 @@ class BotManager extends EventEmitter {
       if (group.enabled === false) {
         throw new Error(`Grupo "${group.label}" esta desativado (comandos desligados)`);
       }
-      if (this.isActivateRunning(groupId)) {
-        throw new Error(`Ativador ja rodando no grupo "${group.label}"`);
+      const running = this.getRunningActivate();
+      if (running) {
+        if (running.groupId === groupId) {
+          throw new Error(`Ativador ja rodando no grupo "${group.label}"`);
+        }
+        const label = running.group?.label || running.groupId;
+        throw new Error(
+          `Ja existe um ativador rodando no grupo "${label}". Pare-o antes de iniciar outro.`,
+        );
       }
     }
 
@@ -173,12 +223,7 @@ class BotManager extends EventEmitter {
     const args = [BOT_CONFIG[name].script];
     let envExtra = {};
 
-    if (name === 'generate') {
-      const count = Number(options.count) > 0 ? Number(options.count) : 1;
-      startOptions.count = count;
-      args.push(`--count=${count}`);
-      args.push(`--concurrency=${concurrency}`);
-    } else if (name === 'activate') {
+    if (name === 'activate') {
       const group = getGroupById(options.groupId);
       const paths = ensureGroupDirs(group.slug);
       const limit = this.resolveActivateLimit(options);
@@ -206,11 +251,7 @@ class BotManager extends EventEmitter {
     if (options.noProxy) args.push('--no-proxy');
     args.push('--simple-logs');
 
-    if (name === 'activate') {
-      this.clearLogs('activate', startOptions.groupId);
-    } else {
-      this.clearLogs(name);
-    }
+    this.clearLogs('activate', startOptions.groupId);
 
     const env = {
       ...process.env,
@@ -234,13 +275,15 @@ class BotManager extends EventEmitter {
     child.startedAt = new Date().toISOString();
     child.startOptions = startOptions;
 
-    if (name === 'activate') {
-      this.processes.activate.set(startOptions.groupId, child);
-    } else {
-      this.processes.generate = child;
-    }
+    this.processes.activate.set(startOptions.groupId, child);
+    writeActivateLock({
+      groupId: startOptions.groupId,
+      groupLabel: startOptions.groupLabel,
+      pid: child.pid,
+      startedAt: child.startedAt,
+    });
 
-    const logGroupId = name === 'activate' ? startOptions.groupId : null;
+    const logGroupId = startOptions.groupId;
 
     child.stdout.on('data', (chunk) => {
       for (const line of chunk.toString().split(/\r?\n/)) {
@@ -261,24 +304,21 @@ class BotManager extends EventEmitter {
         'system',
         logGroupId,
       );
-      if (name === 'activate') {
-        this.processes.activate.delete(startOptions.groupId);
-        this.emit('exit', name, { code, signal, groupId: startOptions.groupId });
-        const exitOpts = { ...startOptions };
-        setTimeout(() => {
-          this._maybeSendReadyPixOnActivateExit(exitOpts).catch((err) => {
-            this.appendLog(
-              'activate',
-              `[ready-pix backup falhou: ${err.message}]`,
-              'stderr',
-              exitOpts.groupId,
-            );
-          });
-        }, 3000);
-      } else {
-        this.processes.generate = null;
-        this.emit('exit', name, { code, signal });
-      }
+      this.processes.activate.delete(startOptions.groupId);
+      const lock = readActivateLock();
+      if (lock && lock.pid === child.pid) clearActivateLock();
+      this.emit('exit', name, { code, signal, groupId: startOptions.groupId });
+      const exitOpts = { ...startOptions };
+      setTimeout(() => {
+        this._maybeSendReadyPixOnActivateExit(exitOpts).catch((err) => {
+          this.appendLog(
+            'activate',
+            `[ready-pix backup falhou: ${err.message}]`,
+            'stderr',
+            exitOpts.groupId,
+          );
+        });
+      }, 3000);
     });
 
     return {
@@ -353,13 +393,40 @@ class BotManager extends EventEmitter {
       const groupId = String(options.groupId || '').trim();
       if (!groupId) throw new Error('groupId obrigatorio para parar o ativador');
       const proc = this.processes.activate.get(groupId);
-      if (!proc || proc.killed) return { stopped: false, reason: 'not_running' };
-      return this._stopProcess(proc);
+      if (proc && !proc.killed) return this._stopProcess(proc);
+      // Sem handle em memoria: run orfao apos restart do servidor, rastreado so pelo lock.
+      const lock = readActivateLock();
+      if (lock && lock.groupId === groupId && isPidAlive(lock.pid)) {
+        return this._stopOrphan(lock);
+      }
+      return { stopped: false, reason: 'not_running' };
     }
 
-    const proc = this.processes[name];
-    if (!proc || proc.killed) return { stopped: false, reason: 'not_running' };
-    return this._stopProcess(proc);
+    throw new Error(`Bot desconhecido: ${name}`);
+  }
+
+  async _stopOrphan(lock) {
+    const group = getGroupById(lock.groupId);
+    const profilesDir = group?.slug
+      ? path.join(ROOT_DIR, 'data', 'groups', group.slug, 'chrome-profiles')
+      : resolveProfilesRoot();
+
+    try {
+      process.kill(lock.pid, 'SIGTERM');
+    } catch {
+      /* ja morto */
+    }
+    await new Promise((r) => setTimeout(r, 4000));
+    if (isPidAlive(lock.pid)) {
+      try {
+        process.kill(lock.pid, 'SIGKILL');
+      } catch {
+        /* ja morto */
+      }
+    }
+    killStaleChromeFromProfiles(null, { force: true, profilesDir });
+    clearActivateLock();
+    return { stopped: true, orphaned: true };
   }
 
   resolveStopProfilesDir(proc) {

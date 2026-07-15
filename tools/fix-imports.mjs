@@ -13,7 +13,7 @@ const REPLACEMENTS = {
   './pageHelpers.js': '../browser/pageHelpers.js',
   './turnstile.js': '../browser/turnstile.js',
   './grokLogin.js': '../grok/grokLogin.js',
-  './grokSignup.js': '../grok/grokSignup.js',
+  './grokTrial.js': '../grok/grokTrial.js',
   './grokSubscribe.js': '../grok/grokSubscribe.js',
   './trialOffer.js': '../grok/trialOffer.js',
   './stripeDiag.js': '../grok/stripeDiag.js',
@@ -23,8 +23,6 @@ const REPLACEMENTS = {
   './paidStore.js': '../pix/paidStore.js',
   './cpf.js': '../pix/cpf.js',
   './accounts.js': '../accounts/accounts.js',
-  './generatorEmail.js': '../accounts/generatorEmail.js',
-  './names.js': '../accounts/names.js',
   './whatsapp.js': '../whatsapp/whatsapp.js',
   './whatsappBaileys.js': '../whatsapp/whatsappBaileys.js',
   './subscribeActivity.js': '../whatsapp/subscribeActivity.js',
@@ -104,7 +102,7 @@ function walk(dir) {
             "from '../../activate/worker.js'",
           );
         }
-      } else if (rel.endsWith('generate/worker.js') || rel.endsWith('activate/worker.js')) {
+      } else if (rel.endsWith('activate/worker.js')) {
         content = fixBotWorker(content);
       } else if (rel.startsWith('scripts/')) {
         content = fixScripts(content);

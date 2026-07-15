@@ -5,7 +5,6 @@
   "type": "module",
   "main": "bot/activate/cli.js",
   "scripts": {
-    "generate": "node bot/generate/cli.js",
     "activate": "node bot/activate/cli.js",
     "pix": "node bot/activate/cli.js",
     "start": "node bot/activate/cli.js",

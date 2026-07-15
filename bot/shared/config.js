@@ -9,15 +9,21 @@ const __dirname = path.dirname(__filename);
 export const ROOT_DIR = path.resolve(__dirname, '../..');
 
 const ENV_PATH = path.join(ROOT_DIR, '.env');
-dotenv.config({
-  path: ENV_PATH,
-  override: process.env.KLIVA_MANAGED === '1',
-});
+// Nunca sobrescrever process.env: o botManager injeta RESULTS_FILE/WHATSAPP_* por grupo.
+dotenv.config({ path: ENV_PATH, override: false });
 
 function resolveDataPath(rel) {
   const normalized = String(rel || '').replace(/\\/g, '/');
   const rootPath = path.join(ROOT_DIR, normalized);
   if (fs.existsSync(rootPath)) return normalized;
+
+  // Caminhos aninhados (ex.: data/groups/slug/results.json) nao devem colapsar
+  // para data/<basename> quando o arquivo ainda nao existe.
+  const dir = path.posix.dirname(normalized);
+  if (dir !== '.' && dir !== 'data') {
+    return normalized.startsWith('data/') ? normalized : `data/${normalized}`;
+  }
+
   const base = path.basename(normalized);
   const dataRel = path.join('data', base).replace(/\\/g, '/');
   const dataPath = path.join(ROOT_DIR, dataRel);
@@ -76,48 +82,6 @@ function stripInlineEnvComment(value) {
   const hash = s.indexOf(' #');
   return hash >= 0 ? s.slice(0, hash).trim() : s;
 }
-
-function parseDomainList(raw) {
-  if (!raw) return [];
-  return raw
-    .split(',')
-    .map((d) => d.trim().replace(/^@/, ''))
-    .filter(Boolean);
-}
-
-/**
- * generator.email: 3 modos.
- *  - fixed:     GENERATOR_EMAIL_DOMAIN=um.dominio           -> sempre esse dominio
- *  - env:       GENERATOR_EMAIL_USE_DEFAULT_DOMAINS=true    -> sorteia entre GENERATOR_EMAIL_DOMAINS
- *  - generator: (padrao)                                    -> busca dominios ao vivo no site
- */
-function resolveEmailConfig() {
-  if (process.env.GENERATOR_EMAIL_DOMAIN) {
-    return {
-      domains: [process.env.GENERATOR_EMAIL_DOMAIN.replace(/^@/, '')],
-      mode: 'fixed',
-    };
-  }
-
-  const useEnvDomains = bool(
-    process.env.GENERATOR_EMAIL_USE_DEFAULT_DOMAINS,
-    false,
-  );
-  const envDomains = parseDomainList(process.env.GENERATOR_EMAIL_DOMAINS);
-
-  if (useEnvDomains) {
-    if (envDomains.length === 0) {
-      throw new Error(
-        'GENERATOR_EMAIL_USE_DEFAULT_DOMAINS=true requer GENERATOR_EMAIL_DOMAINS no .env',
-      );
-    }
-    return { domains: envDomains, mode: 'env' };
-  }
-
-  return { domains: [], mode: 'generator' };
-}
-
-const emailConfig = resolveEmailConfig();
 
 function looksLikeProxyUrl(value) {
   const v = String(value || '').trim();
@@ -186,7 +150,6 @@ export const config = {
   proxyKeepProfile: bool(process.env.PROXY_KEEP_PROFILE, true),
   // Liga/desliga a proxy por bot (independente). CLI --proxy / --no-proxy sobrescreve.
   loginUseProxy: bool(process.env.LOGIN_USE_PROXY ?? process.env.PIX_USE_PROXY, true),
-  generateUseProxy: bool(process.env.GENERATE_USE_PROXY, true),
 
   loginUrl: buildDefaultLoginUrl(),
   emailLoginUrl: buildEmailLoginUrl(process.env.GROK_LOGIN_URL || buildDefaultLoginUrl()),
@@ -202,22 +165,6 @@ export const config = {
 
   subscribeTrial: bool(process.env.SUBSCRIBE_TRIAL, false),
 
-  // ===== Gerador de contas (npm run generate) =====
-  email: {
-    ...emailConfig,
-    baseUrl: process.env.GENERATOR_EMAIL_BASE_URL || 'https://generator.email',
-  },
-  performance: {
-    emailPollMs: int(process.env.EMAIL_POLL_MS, 700),
-  },
-  signupUrl: process.env.GROK_SIGNUP_URL || 'https://accounts.x.ai/sign-up',
-  signupPassword:
-    process.env.SIGNUP_PASSWORD ||
-    process.env.XAI_DEFAULT_PASSWORD ||
-    'Klivaapps12345@',
-  signupFirstName: (process.env.SIGNUP_FIRST_NAME || '').trim(),
-  signupLastName: (process.env.SIGNUP_LAST_NAME || '').trim(),
-  generateCount: int(process.env.GENERATE_COUNT, 1),
   /**
    * Envia contas prontas do PIX no grupo ao finalizar/parar o ativador.
    * Aceita a chave antiga WHATSAPP_SEND_GENERATED_ON_STOP como fallback.
@@ -227,15 +174,6 @@ export const config = {
       process.env.WHATSAPP_SEND_GENERATED_ON_STOP,
     false,
   ),
-  generatedAccountsFile: resolveDataPath(
-    process.env.GENERATED_ACCOUNTS_FILE ||
-      process.env.ACCOUNTS_FILE ||
-      'accounts.txt',
-  ),
-  generatedResultsFile: resolveDataPath(
-    process.env.GENERATED_RESULTS_FILE || 'generated-results.json',
-  ),
-  emailTimeoutMs: int(process.env.EMAIL_TIMEOUT_MS, 180000),
 
   pixPayerName: (process.env.PIX_PAYER_NAME || '').trim(),
   pixPayerCpf: (process.env.PIX_PAYER_CPF || '').trim(),

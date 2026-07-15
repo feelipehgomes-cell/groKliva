@@ -278,7 +278,7 @@ a {
 }
 
 .bot-status-grid-scroll {
-  max-height: 190px;
+  max-height: 340px;
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 4px;

@@ -1,16 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT_DIR } from '../../bot/shared/config.js';
-import { getEnvMap } from './settingsStore.js';
 
 const GROUPS_FILE = path.join(ROOT_DIR, 'data', 'whatsapp-groups.json');
-
-/** Grupos legados para migração inicial. */
-const LEGACY_GROUPS = [
-  { id: '120363428198374994@g.us', label: 'grok kliva' },
-  { id: '120363428345968335@g.us', label: 'ESCANEAR KLIVA' },
-  { id: '120363412599585849@g.us', label: 'GROK LUCAS' },
-];
 
 function slugify(label) {
   return String(label || 'grupo')
@@ -48,50 +40,9 @@ function writeGroupsFile(groups) {
   fs.writeFileSync(GROUPS_FILE, JSON.stringify(groups, null, 2), 'utf8');
 }
 
-function migrateIfNeeded() {
+function loadGroups() {
   const existing = readGroupsFile();
-  if (existing?.length) return existing;
-
-  const env = getEnvMap();
-  const envGroupId = (env.WHATSAPP_GROUP_ID || '').trim();
-  const envGroupName = (env.WHATSAPP_GROUP_NAME || '').trim();
-
-  const seed = [];
-  const seen = new Set();
-
-  for (const g of LEGACY_GROUPS) {
-    if (!seen.has(g.id)) {
-      seen.add(g.id);
-      seed.push(g);
-    }
-  }
-
-  if (envGroupId && !seen.has(envGroupId)) {
-    const match = LEGACY_GROUPS.find((g) => g.id === envGroupId);
-    seed.unshift({
-      id: envGroupId,
-      label: match?.label || envGroupName || envGroupId,
-    });
-  }
-
-  const groups = seed.map((g, i) => {
-    const base = slugify(g.label);
-    const slug = ensureUniqueSlug(base, seed.slice(0, i).map((x, j) => ({ slug: slugify(x.label) })));
-    return {
-      id: g.id,
-      label: g.label,
-      slug,
-      enabled: true,
-      sendReadyPix: false,
-      createdAt: new Date().toISOString(),
-    };
-  });
-
-  if (!groups.length) return [];
-
-  writeGroupsFile(groups);
-  console.log(`[groupStore] Migrados ${groups.length} grupo(s) para whatsapp-groups.json`);
-  return groups;
+  return existing || [];
 }
 
 /** @deprecated fila de contas e global — nao copia mais para grupo. */
@@ -100,7 +51,7 @@ function migrateGlobalAccounts(_defaultGroup) {
 }
 
 export function listGroups({ enabledOnly = false } = {}) {
-  const groups = migrateIfNeeded();
+  const groups = loadGroups();
   if (enabledOnly) return groups.filter((g) => g.enabled !== false);
   return groups;
 }
@@ -172,7 +123,6 @@ export function removeGroup(groupId) {
   const groups = listGroups();
   const idx = groups.findIndex((g) => g.id === groupId);
   if (idx === -1) throw new Error('Grupo nao encontrado');
-  if (groups.length <= 1) throw new Error('Nao e possivel remover o ultimo grupo');
 
   const [removed] = groups.splice(idx, 1);
   writeGroupsFile(groups);

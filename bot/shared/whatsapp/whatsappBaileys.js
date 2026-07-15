@@ -24,6 +24,8 @@ import {
   messageReactionId,
   registerConfirmedPixMessages,
   replaceTodayReactionSnapshot,
+  recomputeCountsFromMessages,
+  normalizeReactionAtMs,
   waMessageId,
 } from './reactionCountStore.js';
 
@@ -452,10 +454,14 @@ function isTargetGroupOne(remote, groupJid) {
   return idA.length >= 8 && idA === idB;
 }
 
-function ingestReactionEntry(entry, { groupJid, log } = {}) {
+function ingestReactionEntry(entry, { groupJid, groupJids, log } = {}) {
   if (!entry?.messageKey?.id) return;
   const remote = entry.messageKey.remoteJid || entry.messageKey.remoteJidAlt || '';
-  if (groupJid && !isTargetGroup(remote, groupJid)) return;
+  if (groupJids?.length) {
+    if (!isTargetGroup(remote, groupJids)) return;
+  } else if (groupJid && !isTargetGroup(remote, groupJid)) {
+    return;
+  }
   if (!isConfirmedPixMessage(entry.messageKey)) return;
 
   const emoji = String(entry.emoji || '').trim();
@@ -487,12 +493,12 @@ export function collectReactionsForPixMessage(messageKey) {
       if (waMessageId(msg.key) === targetWaId) {
         for (const reaction of msg.reactions || []) {
           if (!reaction?.text) continue;
-          entries.push({
-            messageKey: msg.key,
-            emoji: reaction.text,
-            at: Number(reaction.senderTimestampMs) || messageTimestampMs(msg) || Date.now(),
-            reactorKey: reaction.key,
-          });
+        entries.push({
+          messageKey: msg.key,
+          emoji: reaction.text,
+          at: normalizeReactionAtMs(reaction.senderTimestampMs) || messageTimestampMs(msg) || Date.now(),
+          reactorKey: reaction.key,
+        });
         }
       }
     }
@@ -611,11 +617,11 @@ function scanCachedReactionsForGroup(groupJid) {
 
       for (const reaction of msg.reactions || []) {
         if (!reaction?.text) continue;
-        entries.push({
-          messageKey: msg.key,
-          emoji: reaction.text,
-          at: Number(reaction.senderTimestampMs) || messageTimestampMs(msg) || Date.now(),
-        });
+          entries.push({
+            messageKey: msg.key,
+            emoji: reaction.text,
+            at: normalizeReactionAtMs(reaction.senderTimestampMs) || messageTimestampMs(msg) || Date.now(),
+          });
       }
     }
   }
@@ -742,17 +748,27 @@ export async function buildTodayReactionReportForGroup(groupJid, { log, sock } =
   const entries = collectAllReactionsForConfirmedPix(groupJid, confirmedWaIds);
   const aggregated = aggregateReactionEntries(entries, { confirmedWaIds });
 
+  // Mescla persistido + cache (cache ganha por mensagem) — evita zerar se o cache estiver incompleto.
+  const mergedMessages = { ...(stored.messages || {}), ...(aggregated.messages || {}) };
+  const mergedCounts = recomputeCountsFromMessages(mergedMessages);
+
   await replaceTodayReactionSnapshot({
-    counts: aggregated.counts,
-    messages: aggregated.messages,
-    confirmedPix: getTodayReactionCounts().confirmedPix,
+    counts: mergedCounts,
+    messages: mergedMessages,
+    confirmedPix: stored.confirmedPix,
   });
 
   const pixCount = getConfirmedWaIdSet().size;
+  const total = Object.values(mergedCounts).reduce((s, n) => s + n, 0);
   log?.info?.(
-    `WhatsApp: /count -> ${aggregated.total} reacao(oes) em ${pixCount} PIX confirmado(s).`,
+    `WhatsApp: /count -> ${total} reacao(oes) em ${pixCount} PIX confirmado(s).`,
   );
-  return formatReactionReport(aggregated);
+  return formatReactionReport({
+    dateKey: stored.dateKey,
+    counts: mergedCounts,
+    total,
+    confirmedPixCount: pixCount,
+  });
 }
 
 function bindReactionListeners(sock) {
@@ -769,7 +785,8 @@ function bindReactionListeners(sock) {
         const entry = extractReactionFromEvent(event);
         if (!entry) continue;
         const remote = entry.messageKey.remoteJid || entry.messageKey.remoteJidAlt || '';
-        if (!isTargetGroup(remote, groupJids)) continue;
+        if (remote && !isTargetGroup(remote, groupJids)) continue;
+        if (!remote && !isConfirmedPixMessage(entry.messageKey)) continue;
         ingestReactionEntry(entry, { groupJid: remote, log });
       } catch (err) {
         log?.warn?.(`WhatsApp reacao: ${err.message}`);
