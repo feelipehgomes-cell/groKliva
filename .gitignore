@@ -17,3 +17,4 @@ payer-results.txt
 payer-results-state.json
 *.log
 ui/dist/
+dist-release/

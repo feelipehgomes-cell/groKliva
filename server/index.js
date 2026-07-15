@@ -4,6 +4,8 @@ import cors from 'cors';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ROOT_DIR } from '../bot/shared/config.js';
+import { isReleaseBuild } from '../bot/shared/releasePaths.js';
+import { assertLicenseOrExit } from '../bot/shared/license.js';
 import botsRouter from './routes/bots.js';
 import accountsRouter from './routes/accounts.js';
 import cpfsRouter from './routes/cpfs.js';
@@ -15,7 +17,7 @@ import { startWhatsAppHub } from './services/whatsappHub.js';
 
 const app = express();
 const PORT = process.env.KLIVA_PORT || 4000;
-const isDev = process.env.KLIVA_DEV === '1';
+const isDev = process.env.KLIVA_DEV === '1' && !isReleaseBuild();
 
 app.use(cors());
 app.use(express.json());
@@ -71,15 +73,26 @@ async function setupUi() {
   });
 }
 
-await setupUi();
-
-server.listen(PORT, () => {
-  if (isDev) {
-    console.log(`KLIVA dev http://localhost:${PORT} (hot reload ativo)`);
-  } else {
-    console.log(`KLIVA server http://localhost:${PORT}`);
+async function main() {
+  if (isReleaseBuild()) {
+    await assertLicenseOrExit();
   }
-  startWhatsAppHub().catch((err) => {
-    console.warn('[whatsapp-hub] nao iniciado:', err.message);
+
+  await setupUi();
+
+  server.listen(PORT, () => {
+    if (isDev) {
+      console.log(`KLIVA dev http://localhost:${PORT} (hot reload ativo)`);
+    } else {
+      console.log(`KLIVA server http://localhost:${PORT}`);
+    }
+    startWhatsAppHub().catch((err) => {
+      console.warn('[whatsapp-hub] nao iniciado:', err.message);
+    });
   });
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });

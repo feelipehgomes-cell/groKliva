@@ -14,7 +14,7 @@ import {
   wakePage,
 } from '../browser/pageHelpers.js';
 
-const require = createRequire(import.meta.url);
+const require = createRequire(path.join(ROOT_DIR, 'package.json'));
 const solvers = new WeakMap();
 let checkTurnstileCached = undefined;
 let foregroundTurnstileChain = Promise.resolve();

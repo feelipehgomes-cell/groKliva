@@ -19,7 +19,9 @@
     "whatsapp:login": "node bot/scripts/whatsapp-login.js",
     "whatsapp:connect": "node bot/scripts/whatsapp-login.js --connect",
     "whatsapp:groups": "node bot/scripts/whatsapp-groups.js",
-    "whatsapp:test": "node bot/scripts/whatsapp-test-send.js"
+    "whatsapp:test": "node bot/scripts/whatsapp-test-send.js",
+    "release": "node tools/release/build.mjs",
+    "license:generate": "node tools/release/generate-license.mjs"
   },
   "engines": {
     "node": ">=18"
@@ -34,5 +36,9 @@
     "puppeteer-real-browser": "^1.4.4",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "bytenode": "^1.5.7",
+    "esbuild": "^0.25.0"
   }
 }

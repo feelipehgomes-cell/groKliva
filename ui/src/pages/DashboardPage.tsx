@@ -49,19 +49,21 @@ function GroupCard({
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <div>
-          <p className="card-title" style={{ margin: 0 }}>
-            {group.label}
-          </p>
-          <span
-            className={`badge ${stopping || group.running ? 'badge-running' : 'badge-idle'}`}
-          >
-            {stopping ? 'Parando...' : group.running ? 'Rodando' : 'Parado'}
-          </span>
-          {!commandsOn && (
-            <span className="badge badge-idle" style={{ marginLeft: 6 }} title="Comandos WhatsApp desativados neste grupo">
-              Comandos off
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 8px' }}>
+            <p className="card-title" style={{ margin: 0 }}>
+              {group.label}
+            </p>
+            <span
+              className={`badge ${stopping || group.running ? 'badge-running' : 'badge-idle'}`}
+            >
+              {stopping ? 'Parando...' : group.running ? 'Rodando' : 'Parado'}
             </span>
-          )}
+            {!commandsOn && (
+              <span className="badge badge-idle" title="Comandos WhatsApp desativados neste grupo">
+                Comandos off
+              </span>
+            )}
+          </div>
           <span style={{ display: 'block', marginTop: 6, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
             {readyCount === 1 ? '1 conta pronta' : `${readyCount} contas prontas`}
           </span>

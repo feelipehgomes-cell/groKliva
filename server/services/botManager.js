@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { ROOT_DIR } from '../../bot/shared/config.js';
+import { getActivateScript } from '../../bot/shared/releasePaths.js';
 import { killStaleChromeFromProfiles, resolveProfilesRoot } from '../../bot/shared/browser/browser.js';
 import { getEnvMap } from './settingsStore.js';
 import { getGroupById, ensureGroupDirs, groupSendReadyPixEnabled } from './groupStore.js';
@@ -10,7 +11,9 @@ import { getPaidEmails } from '../../bot/shared/pix/paidStore.js';
 
 const BOT_CONFIG = {
   activate: {
-    script: path.join(ROOT_DIR, 'bot/activate/cli.js'),
+    get script() {
+      return getActivateScript();
+    },
     label: 'Ativar via PIX',
   },
 };

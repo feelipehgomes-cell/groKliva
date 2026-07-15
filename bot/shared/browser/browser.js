@@ -359,6 +359,7 @@ export async function launchBrowser({ proxy, log, profileKey, windowSlot = 1 } =
   browser.__freshProfile = config.chromeFreshProfile;
   browser.__profileWasFresh = profileWasFresh;
   browser.__realPage = page;
+  attachChromePid(browser, log);
 
   return browser;
 }
@@ -693,12 +694,145 @@ export async function closeBrowser(browser, log, { cleanupProfile = true, fast =
 
 }
 
+/**
+ * PID do chrome-launcher a partir da porta do CDP (puppeteer.connect nao expoe process()).
+ */
+function findChromePidByDebugPort(port) {
+  const p = Number(port);
+  if (!Number.isFinite(p) || p <= 0) return null;
+
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync(`netstat -ano | findstr :${p}`, {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 8000,
+        shell: true,
+      });
+      const re = new RegExp(
+        `(?:127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\]|\\[::\\]):${p}\\s+\\S+\\s+LISTENING\\s+(\\d+)`,
+        'i',
+      );
+      for (const line of String(out).split(/\r?\n/)) {
+        const m = line.match(re);
+        if (m) {
+          const pid = parseInt(m[1], 10);
+          if (Number.isFinite(pid) && pid > 0) return pid;
+        }
+      }
+      return null;
+    }
+
+    const out = execSync(`lsof -t -iTCP:${p} -sTCP:LISTEN 2>/dev/null || true`, {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    const pid = parseInt(String(out).trim().split(/\s+/)[0], 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function attachChromePid(browser, log) {
+  if (!browser || browser.__chromePid) return;
+  try {
+    const ws = typeof browser.wsEndpoint === 'function' ? browser.wsEndpoint() : '';
+    const m = String(ws).match(/:(\d+)(?:\/|$)/);
+    if (!m) return;
+    const pid = findChromePidByDebugPort(m[1]);
+    if (pid) {
+      browser.__chromePid = pid;
+      log?.debug?.(`Chrome PID ${pid} (CDP :${m[1]})`);
+    }
+  } catch (e) {
+    log?.debug?.('attachChromePid falhou:', e.message);
+  }
+}
+
+function isPidAlive(pid) {
+  if (!(pid > 0)) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function killPidTree(pid, log) {
+  if (!(pid > 0)) return false;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        timeout: 10000,
+        stdio: 'ignore',
+      });
+    } else {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        process.kill(pid, 'SIGKILL');
+      }
+    }
+    return true;
+  } catch (e) {
+    log?.debug?.(`killPidTree ${pid}:`, e.message);
+    return false;
+  }
+}
+
+/**
+ * Forca morte do Chrome do perfil.
+ * Necessario porque puppeteer-real-browser usa connect() — browser.process() e sempre null.
+ * Sem isso, close() travado deixa Chrome zumbi e o pool abre mais janelas que o CONCURRENCY.
+ */
+function forceKillBrowserChrome(browser, log) {
+  if (!browser) return;
+
+  try {
+    const proc = browser.process?.();
+    if (proc && !proc.killed) {
+      log?.warn?.('Forcando encerramento via browser.process().');
+      proc.kill('SIGKILL');
+    }
+  } catch {
+    /* noop */
+  }
+
+  const pid = browser.__chromePid;
+  if (pid && isPidAlive(pid)) {
+    log?.warn?.(`Forcando encerramento do Chrome PID ${pid}.`);
+    killPidTree(pid, log);
+  }
+
+  // Fallback por perfil so se o PID nao bastou (connect sem PID, ou tree incompleta).
+  if (!pid || isPidAlive(pid)) {
+    const userDataDir = browser.__userDataDir;
+    if (userDataDir) {
+      const killed = killStaleChromeFromProfiles(log, { force: true, profilesDir: userDataDir });
+      if (killed > 0) {
+        log?.warn?.(`Chrome forçado pelo perfil (${killed} processo(s)).`);
+      }
+    }
+  }
+
+  try {
+    if (typeof browser.disconnect === 'function') browser.disconnect();
+  } catch {
+    /* noop */
+  }
+}
+
 /** Fecha browser com limite de tempo — evita instancia presa quando Chrome trava. */
 export async function closeBrowserForced(browser, log, opts = {}) {
   if (!browser) return;
 
   const forceMs = opts.forceMs ?? 8000;
+  const chromePid = browser.__chromePid;
   let closed = false;
+  let timedOut = false;
 
   await Promise.race([
     closeBrowser(browser, log, opts).then(() => {
@@ -707,19 +841,19 @@ export async function closeBrowserForced(browser, log, opts = {}) {
     new Promise((resolve) => {
       setTimeout(() => {
         if (closed) return resolve();
-        try {
-          const proc = browser.process?.();
-          if (proc && !proc.killed) {
-            log?.warn?.('Browser nao fechou a tempo — forcando encerramento.');
-            proc.kill('SIGKILL');
-          }
-        } catch {
-          /* noop */
-        }
+        timedOut = true;
+        log?.warn?.('Browser nao fechou a tempo — forcando encerramento.');
+        forceKillBrowserChrome(browser, log);
         resolve();
       }, forceMs);
     }),
   ]);
+
+  // close() via connect() pode "ok" sem matar o processo do chrome-launcher.
+  if (!timedOut && chromePid && isPidAlive(chromePid)) {
+    log?.warn?.(`Chrome PID ${chromePid} ainda vivo apos close — forcando.`);
+    killPidTree(chromePid, log);
+  }
 }
 
 

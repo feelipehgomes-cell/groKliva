@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export const ROOT_DIR = path.resolve(__dirname, '../..');
+export const ROOT_DIR = process.env.KLIVA_ROOT
+  ? path.resolve(process.env.KLIVA_ROOT)
+  : path.resolve(__dirname, '../..');
 
 const ENV_PATH = path.join(ROOT_DIR, '.env');
 // Nunca sobrescrever process.env: o botManager injeta RESULTS_FILE/WHATSAPP_* por grupo.

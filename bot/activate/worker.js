@@ -26,10 +26,11 @@ import { subscribeActivityUpdate } from '../shared/whatsapp/subscribeActivity.js
  */
 export async function runAccount(account, { workerId } = {}) {
   const browserRef = { current: null };
+  const abortRef = { aborted: false };
   const baseTimeoutMs = config.accountTimeoutMs;
 
   if (!(baseTimeoutMs > 0)) {
-    return runAccountInner(account, { workerId }, browserRef);
+    return runAccountInner(account, { workerId }, browserRef, {}, abortRef);
   }
 
   let resolveTimeout;
@@ -71,12 +72,14 @@ export async function runAccount(account, { workerId } = {}) {
   };
 
   const result = await Promise.race([
-    runAccountInner(account, { workerId }, browserRef, timeoutHooks),
+    runAccountInner(account, { workerId }, browserRef, timeoutHooks, abortRef),
     timeoutResult,
   ]);
   clearTimeout(timeoutTimer);
 
   if (result?.__accountTimeout) {
+    // Para o trabalho interno — sem isso o retry continua e abre Chrome alem do CONCURRENCY.
+    abortRef.aborted = true;
     const tag = `#${workerId ?? account.index} ${account.email}`;
     const log = createLogger(tag);
     log.error(
@@ -86,6 +89,7 @@ export async function runAccount(account, { workerId } = {}) {
       cleanupProfile: config.chromeFreshProfile,
       fast: true,
     });
+    browserRef.current = null;
     return finishAccount(log, {
       email: account.email,
       ok: false,
@@ -104,6 +108,7 @@ async function runAccountInner(
   { workerId } = {},
   browserRef = { current: null },
   timeoutHooks = {},
+  abortRef = { aborted: false },
 ) {
   const tag = `#${workerId ?? account.index} ${account.email}`;
   const log = createLogger(tag);
@@ -112,6 +117,7 @@ async function runAccountInner(
   let lastResult = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (abortRef.aborted) break;
     if (attempt > 0) log.warn(`Retry ${attempt}/${maxRetries}...`);
 
     // sessao/IP novo a cada tentativa (evita reusar um IP de proxy que caiu)
@@ -127,6 +133,7 @@ async function runAccountInner(
     let browser;
     let publicIp = null;
     try {
+      if (abortRef.aborted) break;
       const launchStart = Date.now();
       browser = await launchBrowser({
         proxy,
@@ -134,6 +141,13 @@ async function runAccountInner(
         profileKey: `${workerId}-${account.email}-${attempt}`,
         windowSlot: parseWindowSlot(workerId),
       });
+      if (abortRef.aborted) {
+        await closeBrowserForced(browser, log, {
+          cleanupProfile: config.chromeFreshProfile,
+          fast: true,
+        });
+        break;
+      }
       if (!config.simpleLogs) {
         log.info(`Chrome aberto em ${Date.now() - launchStart}ms`);
       }
@@ -254,8 +268,10 @@ async function runAccountInner(
       };
       await closeBrowserForced(browser, log, { cleanupProfile: config.chromeFreshProfile });
       browserRef.current = null;
+      if (abortRef.aborted) break;
     }
 
+    if (abortRef.aborted) break;
     if (attempt < maxRetries) await sleep(800);
   }
 

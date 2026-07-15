@@ -1,0 +1,51 @@
+KLIVA — Guia de instalacao (comprador)
+=======================================
+
+REQUISITOS
+----------
+- Windows 10/11
+- Node.js 18 ou superior (https://nodejs.org)
+- Google Chrome instalado
+- Chave de licenca fornecida pelo vendedor
+
+
+INSTALACAO
+----------
+1. Extraia o ZIP em uma pasta (ex.: C:\KLIVA)
+
+2. Copie o arquivo de ambiente:
+   - Renomeie ou copie .env.example para .env
+
+3. Abra o .env e preencha:
+   - KLIVA_LICENSE_KEY=sua-chave-aqui
+   - PROXY_URL (se usar proxy)
+   - WHATSAPP_PHONE_NUMBER (seu numero com DDI)
+
+4. Prepare os dados:
+   - Copie accounts.example.txt para data\accounts.txt
+   - Copie payer-results.example.txt para data\payer-results.txt
+   - Edite com suas contas e CPFs
+
+5. Inicie o programa:
+   - Duplo clique em iniciar.bat
+   - Ou no PowerShell: .\iniciar.ps1
+
+6. Abra no navegador: http://localhost:4000
+
+
+WHATSAPP (primeira vez)
+-----------------------
+Com o KLIVA rodando, use a pagina WhatsApp na interface para conectar.
+A sessao fica salva na pasta whatsapp-auth\ (nao apague).
+
+
+PROBLEMAS COMUNS
+----------------
+- "Licenca invalida": verifique KLIVA_LICENSE_KEY no .env
+- "Node nao encontrado": instale Node.js e reinicie o terminal
+- Chrome nao abre: instale Google Chrome ou defina CHROME_PATH no .env
+
+
+SUPORTE
+-------
+Entre em contato com o vendedor informando a mensagem de erro completa.
