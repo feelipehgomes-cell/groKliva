@@ -7,16 +7,19 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
+  const flattenEssentials = (data: any) => {
+    const flat: Record<string, string> = {};
+    const essentials = data?.groups?.essentials;
+    for (const field of essentials?.fields || []) {
+      flat[field.key] = field.value ?? '';
+    }
+    return flat;
+  };
+
   useEffect(() => {
     api.settings().then((data) => {
       setSettings(data);
-      const flat: Record<string, string> = {};
-      for (const group of Object.values(data.groups || {}) as any[]) {
-        for (const field of group.fields) {
-          flat[field.key] = field.value ?? '';
-        }
-      }
-      setValues(flat);
+      setValues(flattenEssentials(data));
     });
   }, []);
 
@@ -27,13 +30,7 @@ export function SettingsPage() {
     try {
       const data = await api.saveSettings(values);
       setSettings(data);
-      const flat: Record<string, string> = {};
-      for (const group of Object.values(data.groups || {}) as any[]) {
-        for (const field of group.fields) {
-          flat[field.key] = field.value ?? '';
-        }
-      }
-      setValues(flat);
+      setValues(flattenEssentials(data));
       setMessage('Configurações salvas. Reinicie o bot para aplicar.');
     } catch (err: any) {
       setMessage(err.message);
@@ -54,7 +51,9 @@ export function SettingsPage() {
       </div>
 
       <form onSubmit={save}>
-        {Object.entries(settings.groups).map(([id, group]: [string, any]) => (
+        {Object.entries(settings.groups)
+          .filter(([id]) => id !== 'whatsapp')
+          .map(([id, group]: [string, any]) => (
           <div key={id} className="card settings-section">
             <h3>{group.label}</h3>
             <div className="grid-2">

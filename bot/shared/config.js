@@ -3,12 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+function resolveRootDir() {
+  if (process.env.KLIVA_ROOT) {
+    return path.resolve(process.env.KLIVA_ROOT);
+  }
+  const __filename = fileURLToPath(import.meta.url);
+  return path.resolve(path.dirname(__filename), '../..');
+}
 
-export const ROOT_DIR = process.env.KLIVA_ROOT
-  ? path.resolve(process.env.KLIVA_ROOT)
-  : path.resolve(__dirname, '../..');
+export const ROOT_DIR = resolveRootDir();
 
 const ENV_PATH = path.join(ROOT_DIR, '.env');
 // Nunca sobrescrever process.env: o botManager injeta RESULTS_FILE/WHATSAPP_* por grupo.
@@ -187,17 +190,17 @@ export const config = {
   pixGenerateWaitMs: int(process.env.PIX_GENERATE_WAIT_MS, 60000),
   pixManualReveal: bool(process.env.PIX_MANUAL_REVEAL, false),
   /**
-   * true = libera o slot apos enviar PIX (NAO confirma pagamento — desativado por padrao).
-   * Ignorado quando WAIT_FOR_PIX_PAYMENT=true.
+   * true = libera o slot apos enviar PIX (NAO confirma pagamento).
+   * Ignorado: o bot sempre aguarda pagamento confirmado.
    */
-  releaseBrowserAfterPixSend: bool(process.env.RELEASE_BROWSER_AFTER_PIX, false),
+  releaseBrowserAfterPixSend: false,
   /** Ms de checagem rapida de pagamento antes de fechar o browser (so modo rapido). */
   pixPostSendCheckMs: int(process.env.PIX_POST_SEND_CHECK_MS, 45000),
-  /** true = mantem browser aberto ate pagamento confirmado no Stripe. */
-  waitForPixPayment: bool(process.env.WAIT_FOR_PIX_PAYMENT, true),
-  /** Ms maximo aguardando pagamento quando WAIT_FOR_PIX_PAYMENT=false (min efetivo 5min). */
+  /** Sempre true: contas prontas exigem pagamento confirmado no Stripe. */
+  waitForPixPayment: true,
+  /** Ms maximo aguardando pagamento no modo hold (nao usado com waitForPixPayment). */
   pixBrowserHoldMs: int(process.env.PIX_BROWSER_HOLD_MS, 180000),
-  /** So usado se WAIT_FOR_PIX_PAYMENT=true. 0 = infinito; 1 = um ciclo e libera browser. */
+  /** 0 = infinito ate pagar; 1 = um ciclo e libera browser. */
   paymentWaitMaxCycles: int(process.env.PAYMENT_WAIT_MAX_CYCLES, 0),
   /** 0 = auto (escala com CONCURRENCY). Ms para aguardar Stripe apos CTA trial. */
   stripeCheckoutWaitMs: int(process.env.STRIPE_CHECKOUT_WAIT_MS, 0),
@@ -234,7 +237,7 @@ export const config = {
   whatsappGroupName: (process.env.WHATSAPP_GROUP_NAME || '').trim(),
   whatsappWebhookUrl: (process.env.WHATSAPP_WEBHOOK_URL || '').trim(),
   whatsappCommandsEnabled: bool(process.env.WHATSAPP_COMMANDS_ENABLED, true),
-  whatsappCommandsPublic: bool(process.env.WHATSAPP_COMMANDS_PUBLIC, false),
+  whatsappCommandsPublic: bool(process.env.WHATSAPP_COMMANDS_PUBLIC, true),
   whatsappAdminPhones: (process.env.WHATSAPP_ADMIN_PHONES || '').trim(),
   /** true = entrega de mensagens em tempo real no hub (recomendado para /start). */
   whatsappMarkOnlineOnConnect: bool(process.env.WHATSAPP_MARK_ONLINE_ON_CONNECT, false),

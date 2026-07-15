@@ -456,7 +456,7 @@ async function monitorPixPaymentAfterSend(
   timeoutHooks?.onPixWaitingPayment?.();
 
   if (config.waitForPixPayment) {
-    log.info('Aguardando pagamento no browser (WAIT_FOR_PIX_PAYMENT=true)...');
+    log.info('Aguardando pagamento no browser...');
     const paid = await waitForPaymentLoop(page, pixMsg, log, browser);
     if (paid) {
       await markPaymentConfirmed(account, pixMsg, lastResult, log);

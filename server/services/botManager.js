@@ -258,6 +258,8 @@ class BotManager extends EventEmitter {
 
     const env = {
       ...process.env,
+      KLIVA_ROOT: ROOT_DIR,
+      KLIVA_RELEASE: process.env.KLIVA_RELEASE || '1',
       KLIVA_MANAGED: '1',
       KLIVA_PORT: String(process.env.KLIVA_PORT || 4000),
       ...getEnvMap(),

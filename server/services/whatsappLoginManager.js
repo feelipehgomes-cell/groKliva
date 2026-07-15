@@ -57,7 +57,7 @@ export function getWhatsAppUiStatus() {
     settings: {
       whatsappEnabled: envBool(env.WHATSAPP_ENABLED, true),
       commandsEnabled: envBool(env.WHATSAPP_COMMANDS_ENABLED, true),
-      commandsPublic: envBool(env.WHATSAPP_COMMANDS_PUBLIC, false),
+      commandsPublic: envBool(env.WHATSAPP_COMMANDS_PUBLIC, true),
       adminPhones: String(env.WHATSAPP_ADMIN_PHONES || '').trim(),
       sendReadyPixOnStop: envBool(env.WHATSAPP_SEND_READY_PIX_ON_STOP, false),
     },

@@ -293,9 +293,7 @@ export async function runActivateBot(opts = {}) {
     logger.info(
       ` whatsapp contas prontas ao parar: ${config.whatsappSendReadyPixOnStop ? 'on' : 'off'}`,
     );
-    logger.info(
-      ` modo pix: ${config.waitForPixPayment ? 'aguardar pagamento confirmado' : config.releaseBrowserAfterPixSend ? 'rapido (sem confirmar)' : 'hold browser'}`,
-    );
+    logger.info(' modo pix: aguardar pagamento confirmado');
     logger.info('==============================================');
   }
 

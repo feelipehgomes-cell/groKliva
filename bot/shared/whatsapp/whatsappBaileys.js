@@ -195,7 +195,37 @@ async function sendWithBaileysRetry(task, { log, label = 'envio' } = {}) {
 }
 
 function authDir() {
-  return path.resolve(config.whatsappAuthDir);
+  const rel = String(config.whatsappAuthDir || 'whatsapp-auth').trim();
+  if (path.isAbsolute(rel)) return rel;
+  return path.join(ROOT_DIR, rel);
+}
+
+async function resolveBaileysVersion(log) {
+  const envVersion = (process.env.WHATSAPP_BAILEYS_VERSION || '').trim();
+  if (envVersion) {
+    const parts = envVersion.split(/[.,]/).map((n) => parseInt(n, 10));
+    if (parts.length === 3 && parts.every((n) => Number.isFinite(n))) {
+      log?.info?.(`WhatsApp: versao ${parts.join('.')} (WHATSAPP_BAILEYS_VERSION)`);
+      return parts;
+    }
+  }
+
+  try {
+    const result = await fetchLatestBaileysVersion();
+    if (result?.version?.length === 3) {
+      log?.info?.(`WhatsApp: versao ${result.version.join('.')} (latest)`);
+      return result.version;
+    }
+    if (result?.error) {
+      log?.warn?.(`fetchLatestBaileysVersion: ${result.error?.message || result.error}`);
+    }
+  } catch (err) {
+    log?.warn?.(`fetchLatestBaileysVersion falhou: ${err.message}`);
+  }
+
+  const fallback = [2, 3000, 1033846690];
+  log?.warn?.(`WhatsApp: usando versao fallback ${fallback.join('.')}`);
+  return fallback;
 }
 
 function credsFilePath() {
@@ -1015,7 +1045,7 @@ export function runBaileysSession({
         // Reduz o inchaco da pasta (milhares de lid-mapping deixam a I/O lenta).
         pruneLidMappingBloat(log);
         const { state, saveCreds } = await useMultiFileAuthState(authDir());
-        const { version } = await fetchLatestBaileysVersion();
+        const version = await resolveBaileysVersion(log);
 
         const sock = makeWASocket({
           version,
@@ -1136,7 +1166,9 @@ export function runBaileysSession({
       } catch (err) {
         booting = false;
         if (isStale()) return;
-        log?.warn?.('Boot falhou:', err.message);
+        const msg = err?.message || String(err || 'erro desconhecido');
+        const code = err?.code ? ` code=${err.code}` : '';
+        log?.warn?.(`Boot falhou: ${msg}${code}`);
         if (!settled) {
           await sleep(2500);
           if (!isStale()) await boot();

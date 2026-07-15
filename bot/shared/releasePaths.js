@@ -9,7 +9,7 @@ export function isReleaseBuild() {
 
 export function getActivateScript() {
   if (isReleaseBuild()) {
-    return path.join(ROOT_DIR, 'app', 'run-activate.cjs');
+    return path.join(ROOT_DIR, 'app', 'run-activate.mjs');
   }
   return path.join(ROOT_DIR, 'bot', 'activate', 'cli.js');
 }

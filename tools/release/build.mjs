@@ -15,7 +15,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import * as esbuild from 'esbuild';
-import bytenode from 'bytenode';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -61,10 +60,15 @@ function copyDir(src, dest) {
   }
 }
 
-function writeRunScript(name, jscFile) {
-  const content = `'use strict';
-require('bytenode');
-require('./${jscFile}');
+function writeRunScript(name, bundleFile) {
+  const content = `import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.dirname(fileURLToPath(import.meta.url));
+process.env.KLIVA_ROOT = process.env.KLIVA_ROOT || path.resolve(root, '..');
+process.env.KLIVA_RELEASE = process.env.KLIVA_RELEASE || '1';
+
+await import('./${bundleFile}');
 `;
   fs.writeFileSync(path.join(PKG_DIR, 'app', name), content, 'utf8');
 }
@@ -79,10 +83,10 @@ async function bundleBackend() {
     },
     bundle: true,
     platform: 'node',
-    format: 'cjs',
+    format: 'esm',
     target: 'node18',
     outdir: BUILD_DIR,
-    outExtension: { '.js': '.cjs' },
+    outExtension: { '.js': '.mjs' },
     packages: 'external',
     logLevel: 'info',
     minify: true,
@@ -90,26 +94,26 @@ async function bundleBackend() {
     define: {
       'process.env.__KLIVA_LICENSE_SECRET__': JSON.stringify(LICENSE_SECRET),
     },
-    banner: {
-      js: "'use strict';",
-    },
   });
 }
 
-function compileBytecode() {
+function installAppBundles() {
   const appDir = path.join(PKG_DIR, 'app');
   fs.mkdirSync(appDir, { recursive: true });
 
   const entries = [
-    { src: path.join(BUILD_DIR, 'server.cjs'), out: 'server.jsc', runner: 'run-server.cjs' },
-    { src: path.join(BUILD_DIR, 'bot-activate.cjs'), out: 'bot-activate.jsc', runner: 'run-activate.cjs' },
+    { src: path.join(BUILD_DIR, 'server.mjs'), bundle: 'server.mjs', runner: 'run-server.mjs' },
+    {
+      src: path.join(BUILD_DIR, 'bot-activate.mjs'),
+      bundle: 'bot-activate.mjs',
+      runner: 'run-activate.mjs',
+    },
   ];
 
-  for (const { src, out, runner } of entries) {
+  for (const { src, bundle, runner } of entries) {
     if (!fs.existsSync(src)) throw new Error(`Bundle nao encontrado: ${src}`);
-    const dest = path.join(appDir, out);
-    bytenode.compileFile({ filename: src, output: dest, compileAsModule: true });
-    writeRunScript(runner, out);
+    copyFile(src, path.join(appDir, bundle));
+    writeRunScript(runner, bundle);
   }
 
   fs.writeFileSync(
@@ -118,7 +122,8 @@ function compileBytecode() {
       {
         version: VERSION,
         builtAt: new Date().toISOString(),
-        node: process.version,
+        nodeMin: '18.0.0',
+        bundleFormat: 'esbuild-esm-minify',
         licenseMode: LICENSE_SECRET ? 'offline+hmac' : 'online-only',
       },
       null,
@@ -142,7 +147,6 @@ function createPackageJson() {
     engines: rootPkg.engines || { node: '>=18' },
     dependencies: {
       ...rootPkg.dependencies,
-      bytenode: '^1.5.7',
     },
   };
   fs.writeFileSync(path.join(PKG_DIR, 'package.json'), JSON.stringify(pkg, null, 2), 'utf8');
@@ -206,8 +210,8 @@ async function main() {
   console.log('[release] 2/7 — bundle do backend (esbuild)...');
   await bundleBackend();
 
-  console.log('[release] 3/7 — bytecode (bytenode)...');
-  compileBytecode();
+  console.log('[release] 3/7 — empacotar backend (bundles minificados)...');
+  installAppBundles();
 
   console.log('[release] 4/7 — copiar UI e arquivos do cliente...');
   copyDir(path.join(ROOT, 'ui', 'dist'), path.join(PKG_DIR, 'ui', 'dist'));

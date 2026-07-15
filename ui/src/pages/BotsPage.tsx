@@ -135,23 +135,6 @@ export function BotsPage() {
   }, [activateGroupId, groups]);
 
   useEffect(() => {
-    api
-      .settings()
-      .then((data) => {
-        const pixFields = data?.groups?.pix?.fields || [];
-
-        const limitField = pixFields.find((f: any) => f.key === 'ACTIVATE_ACCOUNT_LIMIT');
-        if (limitField) {
-          const n = parseInt(String(limitField.value || '0'), 10);
-          if (Number.isFinite(n) && n >= 0) {
-            setActivateOpts((prev) => ({ ...prev, limit: n }));
-          }
-        }
-      })
-      .catch(console.error);
-  }, []);
-
-  useEffect(() => {
     botPrefs.saveActivate(activateOpts);
   }, [activateOpts]);
 

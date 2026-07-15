@@ -4,9 +4,21 @@ KLIVA — Guia de instalacao (comprador)
 REQUISITOS
 ----------
 - Windows 10/11
-- Node.js 18 ou superior (https://nodejs.org)
+- Node.js 18 ou superior — RECOMENDADO: versao 20 LTS
+  Baixe em: https://nodejs.org/
+  (Node 14, 16 ou 17 NAO funcionam)
 - Google Chrome instalado
 - Chave de licenca fornecida pelo vendedor
+
+
+INSTALAR NODE.JS (se ainda nao tiver)
+-------------------------------------
+1. Acesse https://nodejs.org/
+2. Baixe a versao "20 LTS" (botao verde)
+3. Instale com as opcoes padrao
+4. REINICIE o computador (ou feche e abra o terminal)
+5. Teste: abra o Prompt de Comando e digite: node -v
+   Deve mostrar v18.x ou v20.x (nao v14.x)
 
 
 INSTALACAO
@@ -41,8 +53,10 @@ A sessao fica salva na pasta whatsapp-auth\ (nao apague).
 
 PROBLEMAS COMUNS
 ----------------
+- "Node.js v14" ou "exige Node 18": atualize o Node em https://nodejs.org/
+- "cachedDataRejected" ou "Invalid cached data": Node desatualizado — instale Node 20 LTS
 - "Licenca invalida": verifique KLIVA_LICENSE_KEY no .env
-- "Node nao encontrado": instale Node.js e reinicie o terminal
+- "Node nao encontrado": instale Node.js e reinicie o PC
 - Chrome nao abre: instale Google Chrome ou defina CHROME_PATH no .env
 
 
