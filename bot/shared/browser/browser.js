@@ -185,18 +185,93 @@ export function parseWindowSlot(workerId) {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
-function getWindowPosition(slot) {
-  const width = 1280;
-  const height = 800;
-  const gap = 32;
-  const cols = 2;
+let cachedWorkArea = null;
+
+/** Area util da tela primaria (sem barra de tarefas). */
+function getScreenWorkArea() {
+  if (cachedWorkArea) return cachedWorkArea;
+  const fallback = { width: 1920, height: 1040 };
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync(
+        'powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $w=[System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; Write-Output ($w.Width.ToString() + \' \' + $w.Height.ToString())"',
+        { encoding: 'utf8', timeout: 5000, windowsHide: true },
+      ).trim();
+      const [w, h] = out.split(/\s+/).map((n) => parseInt(n, 10));
+      if (w > 400 && h > 300) {
+        cachedWorkArea = { width: w, height: h };
+        return cachedWorkArea;
+      }
+    }
+  } catch {
+    /* fallback */
+  }
+  cachedWorkArea = fallback;
+  return cachedWorkArea;
+}
+
+/** Grade que cabe N instancias na tela (prioriza colunas em monitores largos). */
+function pickGrid(count, screenW, screenH) {
+  const n = Math.max(1, count);
+  let best = { cols: n, rows: 1, score: Infinity };
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    const tw = screenW / cols;
+    const th = screenH / rows;
+    const aspect = tw / Math.max(1, th);
+    const unused = cols * rows - n;
+    // Prefer aspecto ~1.35 (janela util) e poucas celulas vazias
+    const score = Math.abs(aspect - 1.35) + unused * 0.25 + rows * 0.05;
+    if (score < best.score) best = { cols, rows, score };
+  }
+  return { cols: best.cols, rows: best.rows };
+}
+
+/**
+ * Tamanho + posicao da janela do slot para caber CONCURRENCY instancias na tela.
+ * Retorna { x, y, width, height }.
+ */
+function getWindowLayout(slot) {
+  const screen = getScreenWorkArea();
+  const n = Math.max(1, Number(config.concurrency) || 1);
+  const gap = 6;
+  const { cols, rows } = pickGrid(n, screen.width, screen.height);
+  const width = Math.max(420, Math.floor((screen.width - gap * (cols + 1)) / cols));
+  const height = Math.max(320, Math.floor((screen.height - gap * (rows + 1)) / rows));
   const idx = Math.max(0, (slot || 1) - 1);
   const col = idx % cols;
   const row = Math.floor(idx / cols);
   return {
-    x: col * (width + gap),
-    y: row * (height + gap) + 48,
+    x: gap + col * (width + gap),
+    y: gap + row * (height + gap),
+    width,
+    height,
+    cols,
+    rows,
   };
+}
+
+/** Garante bounds apos o Chrome abrir (perfil pode ignorar --window-size). */
+async function applyWindowBounds(browser, page, layout, log) {
+  if (!page || !layout) return;
+  try {
+    const client =
+      page.__cdp || (await page.target().createCDPSession());
+    page.__cdp = client;
+    const { windowId } = await client.send('Browser.getWindowForTarget');
+    await client.send('Browser.setWindowBounds', {
+      windowId,
+      bounds: {
+        left: layout.x,
+        top: layout.y,
+        width: layout.width,
+        height: layout.height,
+        windowState: 'normal',
+      },
+    });
+  } catch (e) {
+    log?.debug?.(`setWindowBounds falhou: ${e.message}`);
+  }
 }
 
 /** Traz pagina/aba para frente (evita falha de captcha/clique em janela minimizada). */
@@ -309,12 +384,22 @@ export async function launchBrowser({ proxy, log, profileKey, windowSlot = 1 } =
     '--mute-audio',
   ];
 
+  let windowLayout = null;
   if (config.hideWindows && !config.headless) {
     args.push('--window-position=-2400,-2400');
   } else if (!config.headless) {
-    const { x, y } = getWindowPosition(windowSlot);
-    args.push(`--window-position=${x},${y}`);
-    log?.debug?.(`janela slot ${windowSlot} em ${x},${y}`);
+    windowLayout = getWindowLayout(windowSlot);
+    // Substitui o --window-size fixo por tamanho da grade
+    const sizeIdx = args.findIndex((a) => a.startsWith('--window-size='));
+    if (sizeIdx >= 0) {
+      args[sizeIdx] = `--window-size=${windowLayout.width},${windowLayout.height}`;
+    } else {
+      args.push(`--window-size=${windowLayout.width},${windowLayout.height}`);
+    }
+    args.push(`--window-position=${windowLayout.x},${windowLayout.y}`);
+    log?.debug?.(
+      `janela slot ${windowSlot}: ${windowLayout.width}x${windowLayout.height} @ ${windowLayout.x},${windowLayout.y} (grade ${windowLayout.cols}x${windowLayout.rows})`,
+    );
   }
 
 
@@ -359,7 +444,12 @@ export async function launchBrowser({ proxy, log, profileKey, windowSlot = 1 } =
   browser.__freshProfile = config.chromeFreshProfile;
   browser.__profileWasFresh = profileWasFresh;
   browser.__realPage = page;
+  browser.__windowLayout = windowLayout;
   attachChromePid(browser, log);
+
+  if (windowLayout && !config.headless && !config.hideWindows) {
+    await applyWindowBounds(browser, page, windowLayout, log);
+  }
 
   return browser;
 }
@@ -407,6 +497,10 @@ export async function setupPage(browser, { proxy, log, prefetchUrl } = {}) {
     if (config.timezone) await client.send('Emulation.setTimezoneOverride', { timezoneId: config.timezone }).catch(() => {});
 
     if (config.locale) await client.send('Emulation.setLocaleOverride', { locale: config.locale }).catch(() => {});
+
+    if (browser.__windowLayout && !config.headless && !config.hideWindows) {
+      await applyWindowBounds(browser, page, browser.__windowLayout, log);
+    }
 
   } catch (e) {
 

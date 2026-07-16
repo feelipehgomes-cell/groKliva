@@ -6,7 +6,11 @@ import { ROOT_DIR } from './config.js';
 
 const CACHE_FILE = path.join(ROOT_DIR, 'data', '.license-cache.json');
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const EMBEDDED_SECRET = process.env.__KLIVA_LICENSE_SECRET__ || '';
+/** No release vem do build; no dev do vendedor usa LICENSE_SIGNING_SECRET do .env. */
+const EMBEDDED_SECRET =
+  process.env.__KLIVA_LICENSE_SECRET__ ||
+  process.env.LICENSE_SIGNING_SECRET ||
+  '';
 
 export function getMachineId() {
   const raw = [

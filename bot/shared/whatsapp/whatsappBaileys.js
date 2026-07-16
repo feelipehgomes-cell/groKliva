@@ -34,6 +34,35 @@ const PENDING_REPLY_TEXT = 'pendente ⏱️';
 const MAX_CACHED_GROUP_MSGS = 400;
 const PIX_QUOTES_PATH = path.join(ROOT_DIR, 'data', 'whatsapp-pix-quotes.json');
 
+/**
+ * libsignal (deps do Baileys) usa console.warn/info direto ao rotacionar
+ * sessoes Signal — nao passa pelo pino silent e spamma o terminal.
+ * Comportamento normal; so engolimos essas linhas.
+ */
+function muteLibsignalConsoleSpam() {
+  if (globalThis.__klivaLibsignalMuted) return;
+  globalThis.__klivaLibsignalMuted = true;
+
+  const shouldDrop = (args) => {
+    const head = String(args?.[0] ?? '');
+    return (
+      head.includes('Closing open session in favor of incoming prekey bundle') ||
+      head.startsWith('Closing session:') ||
+      head === 'Closing session:'
+    );
+  };
+
+  for (const method of ['info', 'warn', 'log', 'debug']) {
+    const orig = console[method].bind(console);
+    console[method] = (...args) => {
+      if (shouldDrop(args)) return;
+      return orig(...args);
+    };
+  }
+}
+
+muteLibsignalConsoleSpam();
+
 /** Mensagens recentes por grupo — usado para achar PIX ja enviado e responder. */
 const groupMessageCache = new Map();
 

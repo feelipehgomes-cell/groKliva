@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { ROOT_DIR } from '../../bot/shared/config.js';
-import { getActivateScript } from '../../bot/shared/releasePaths.js';
+import { getActivateScript, isReleaseBuild } from '../../bot/shared/releasePaths.js';
 import { killStaleChromeFromProfiles, resolveProfilesRoot } from '../../bot/shared/browser/browser.js';
 import { getEnvMap } from './settingsStore.js';
 import { getGroupById, ensureGroupDirs, groupSendReadyPixEnabled } from './groupStore.js';
@@ -259,13 +259,19 @@ class BotManager extends EventEmitter {
     const env = {
       ...process.env,
       KLIVA_ROOT: ROOT_DIR,
-      KLIVA_RELEASE: process.env.KLIVA_RELEASE || '1',
       KLIVA_MANAGED: '1',
       KLIVA_PORT: String(process.env.KLIVA_PORT || 4000),
       ...getEnvMap(),
       ...envExtra,
       CONCURRENCY: String(concurrency),
     };
+    // So no release (dev/fonte): nao forcar KLIVA_RELEASE — evita exigir secret embarcado.
+    // No pacote de venda, o launcher ja define KLIVA_RELEASE=1.
+    if (isReleaseBuild() || process.env.KLIVA_RELEASE === '1') {
+      env.KLIVA_RELEASE = '1';
+    } else {
+      delete env.KLIVA_RELEASE;
+    }
     if (options.skipWhatsappStartNotice) {
       env.KLIVA_SKIP_WA_START_NOTICE = '1';
     }
