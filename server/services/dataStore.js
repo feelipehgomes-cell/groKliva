@@ -242,6 +242,24 @@ export async function deleteCpf(cpfRaw) {
 
   const body = kept.map((b) => `${b.cpf}|${b.name}`).join('\n');
   fs.writeFileSync(filePath, body ? `${body}\n` : '', 'utf8');
+
+  // Limpa uso/reservas do CPF removido (mesma regra do bot ao detectar recusa).
+  try {
+    const statePath = resolveFile(config.payerResultsStateFile);
+    if (fs.existsSync(statePath)) {
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      if (state.usageByCpf?.[cpf]) delete state.usageByCpf[cpf];
+      if (state.byEmail && typeof state.byEmail === 'object') {
+        for (const [email, mapped] of Object.entries(state.byEmail)) {
+          if (String(mapped) === cpf) delete state.byEmail[email];
+        }
+      }
+      fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf8');
+    }
+  } catch {
+    /* noop */
+  }
+
   return listCpfs();
 }
 

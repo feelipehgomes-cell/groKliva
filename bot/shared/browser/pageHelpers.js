@@ -354,9 +354,6 @@ export async function installCookieAutoDismiss(page) {
  * Rapido: so espera timeouts longos se o banner estiver visivel.
  */
 export async function dismissSubscribeClickBlockers(page) {
-  // #region agent log
-  const __dbgDsb0 = Date.now();
-  // #endregion
   const state = await page
     .evaluate(() => {
       /* eslint-disable no-undef */
@@ -401,10 +398,6 @@ export async function dismissSubscribeClickBlockers(page) {
       poll: 80,
     }).catch(() => false);
   }
-  // #region agent log
-  const __dbgDsbMs = Date.now() - __dbgDsb0;
-  if (__dbgDsbMs > 300) fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'B',location:'pageHelpers.js:dismissSubscribeClickBlockers',message:'dismiss blockers lento',data:{ms:__dbgDsbMs,cookieVisible:!!state.cookieVisible,translateVisible:!!state.translateVisible,url:safePageUrl(page,'').slice(0,90)},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 }
 
 /** Clica por texto visivel com mouse real (React/SPA). */
@@ -1074,7 +1067,9 @@ async function clickOpenSubscribeFromApp(page, log) {
 export async function openSubscribeHashIfOnGrokHome(page, { log, force = false } = {}) {
   const url = safePageUrl(page, '');
   // Nunca mexer no hash em checkout (Stripe ou embutido) — puxaria de volta pro subscribe.
-  if (!/grok\.com/i.test(url) || /checkout|stripe|\/pay\b/i.test(url)) return false;
+  if (!/grok\.com/i.test(url) || /checkout|stripe|\/pay\b/i.test(url)) {
+    return false;
+  }
   if (!force && /#subscribe|\/plans|\/upgrade/i.test(url)) return false;
   log?.debug?.(`Aplicando #subscribe via hash${force ? ' (force/reset)' : ''}.`);
   await applySubscribeHash(page, log);

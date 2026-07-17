@@ -4,7 +4,7 @@ import {
   resolveActivePage,
   focusPage,
 } from '../browser/browser.js';
-import { getPayerData } from '../pix/payer.js';
+import { getPayerData, rotatePayerAfterDecline } from '../pix/payer.js';
 import {
   capturePixOnce,
   detectStripePixContext,
@@ -15,6 +15,7 @@ import {
   attachStripeDiagnostics,
   readStripeUiState,
   logStripeUiState,
+  detectCardDeclinedError,
 } from './stripeDiag.js';
 import { stopBackgroundTurnstileSolver } from '../browser/turnstile.js';
 import {
@@ -140,16 +141,12 @@ const REVEAL_QR_TEXTS = [
 export async function subscribeTrialPix(
   page,
   account,
-  { log, browser, workerId, _frameRetry = 0 } = {},
+  { log, browser, workerId, _frameRetry = 0, _resumeStripe = false } = {},
 ) {
   const sel = config.selectors;
   const progress = { subscribeAttempts: 0, subscribeGrokErrors: 0 };
   subscribeActivityStart(account.email, { workerId, phase: 'subscribe' });
 
-  // #region agent log
-  const __dbgT0 = Date.now();
-  fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'ALL',location:'grokSubscribe.js:subscribeTrialPix:start',message:'subscribe start',data:{email:account.email,url:(page.url?.()||'').slice(0,90),frameRetry:_frameRetry},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   try {
     log.info('Iniciando assinatura trial via PIX...');
@@ -158,73 +155,83 @@ export async function subscribeTrialPix(
     await wakePage(page);
     await installCookieAutoDismiss(page);
     await dismissCookieBanner(page, { timeout: 1500 }).catch(() => {});
-    page = await resolveGrokPlanPage(browser, page, log);
 
-    if (await isPaidOnlySubscribePage(page)) {
-      await screenshot(page, `paid-plans-only-${safe(account.email)}`, log);
-      return fail('conta sem trial: tela de planos pagos ($10/$30/$99)');
+    // Apos frame quebrado no Stripe: retomar checkout — nao voltar aos planos.
+    let skipPlans =
+      _resumeStripe || isStripeCheckoutUrl(String(page?.url?.() || ''));
+    if (skipPlans) {
+      page = await resolveStripeCheckoutPage(browser, page, log).catch(
+        () => page,
+      );
+      skipPlans = isStripeCheckoutUrl(String(page?.url?.() || ''));
     }
 
-    const __plansReadyOk = await ensureTrialPlansReady(page, log, browser);
-    // #region agent log
-    fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'C',location:'grokSubscribe.js:subscribeTrialPix:plansReady',message:'plans ready',data:{email:account.email,ok:__plansReadyOk,msSinceStart:Date.now()-__dbgT0,url:(page.url?.()||'').slice(0,90)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-    if (!__plansReadyOk) {
+    if (!skipPlans) {
       page = await resolveGrokPlanPage(browser, page, log);
+
       if (await isPaidOnlySubscribePage(page)) {
         await screenshot(page, `paid-plans-only-${safe(account.email)}`, log);
         return fail('conta sem trial: tela de planos pagos ($10/$30/$99)');
       }
-      await screenshot(page, `no-trial-cta-${safe(account.email)}`, log);
-      return fail('CTA do trial nao encontrado');
-    }
-    page = await resolveGrokPlanPage(browser, page, log);
-    await dismissSubscribeClickBlockers(page);
 
-    if (await isPaidOnlySubscribePage(page)) {
-      await screenshot(page, `paid-plans-only-${safe(account.email)}`, log);
-      return fail('conta sem trial: tela de planos pagos ($10/$30/$99)');
-    }
+      const plansReadyOk = await ensureTrialPlansReady(page, log, browser);
+      if (!plansReadyOk) {
+        page = await resolveGrokPlanPage(browser, page, log);
+        if (await isPaidOnlySubscribePage(page)) {
+          await screenshot(page, `paid-plans-only-${safe(account.email)}`, log);
+          return fail('conta sem trial: tela de planos pagos ($10/$30/$99)');
+        }
+        await screenshot(page, `no-trial-cta-${safe(account.email)}`, log);
+        return fail('CTA do trial nao encontrado');
+      }
+      page = await resolveGrokPlanPage(browser, page, log);
+      await dismissSubscribeClickBlockers(page);
 
-    // Clica assim que o botao $0 aparecer (retorno imediato quando visivel).
-    if (!(await waitForTrialPlanCta(page, 18000))) {
-      await screenshot(page, `no-plan-page-${safe(account.email)}`, log);
       if (await isPaidOnlySubscribePage(page)) {
+        await screenshot(page, `paid-plans-only-${safe(account.email)}`, log);
         return fail('conta sem trial: tela de planos pagos ($10/$30/$99)');
       }
-      return fail('CTA trial $0.00 nao encontrado (Solicitar oferta de $0.00)');
-    }
 
-    log.info('CTA trial $0 visivel — clicando Solicitar oferta...');
-    page = await resolveGrokPlanPage(browser, page, log);
-    log.debug(`Tela de planos pronta: ${page.url()}`);
+      // Clica assim que o botao $0 aparecer (retorno imediato quando visivel).
+      if (!(await waitForTrialPlanCta(page, 18000))) {
+        await screenshot(page, `no-plan-page-${safe(account.email)}`, log);
+        if (await isPaidOnlySubscribePage(page)) {
+          return fail('conta sem trial: tela de planos pagos ($10/$30/$99)');
+        }
+        return fail('CTA trial $0.00 nao encontrado (Solicitar oferta de $0.00)');
+      }
 
-    const toStripe = await pollThroughTrialPlanToStripe(
-      browser,
-      page,
-      log,
-      sel,
-      {
-        email: account.email,
-        workerId,
-        progress,
-      },
-    );
-    if (!toStripe.ok) {
-      await screenshot(
-        toStripe.page,
-        `trial-plan-stuck-${safe(account.email)}`,
+      log.info('CTA trial $0 visivel — clicando Solicitar oferta...');
+      page = await resolveGrokPlanPage(browser, page, log);
+      log.debug(`Tela de planos pronta: ${page.url()}`);
+
+      const toStripe = await pollThroughTrialPlanToStripe(
+        browser,
+        page,
         log,
+        sel,
+        {
+          email: account.email,
+          workerId,
+          progress,
+        },
       );
-      return fail(
-        toStripe.reason || 'travado na selecao do plano trial',
-        progress,
-      );
+      if (!toStripe.ok) {
+        await screenshot(
+          toStripe.page,
+          `trial-plan-stuck-${safe(account.email)}`,
+          log,
+        );
+        return fail(
+          toStripe.reason || 'travado na selecao do plano trial',
+          progress,
+        );
+      }
+      page = toStripe.page;
+    } else {
+      log.info('Checkout Stripe ja aberto — retomando PIX (sem voltar aos planos).');
     }
-    page = toStripe.page;
-    // #region agent log
-    fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'D',location:'grokSubscribe.js:subscribeTrialPix:stripeOpen',message:'stripe aberto',data:{email:account.email,msSinceStart:Date.now()-__dbgT0,attempts:toStripe.subscribeAttempts,url:(page.url?.()||'').slice(0,90)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
+
     subscribeActivityUpdate(account.email, { phase: 'stripe' });
     await wakePage(page);
 
@@ -241,10 +248,6 @@ export async function subscribeTrialPix(
 
     await waitForStripePaymentContexts(page, log);
 
-    // #region agent log
-    const __dbgPix0 = Date.now();
-    fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'E',location:'grokSubscribe.js:subscribeTrialPix:pixSelectStart',message:'inicio selecao PIX',data:{email:account.email,msSinceStart:Date.now()-__dbgT0},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     if (!(await selectPixPayment(page, sel, log, browser))) {
       page = await resolveStripeCheckoutPage(browser, page, log);
       await sleep(400);
@@ -283,71 +286,125 @@ export async function subscribeTrialPix(
       await sleep(200);
     }
 
+    const MAX_PAYER_ROTATIONS = 5;
     let payer = null;
-    if (payerFields.hasCpf || payerFields.hasName) {
-      payer = await getPayerData(account);
-      subscribeActivityUpdate(account.email, { phase: 'nome/cpf' });
-      log.info(
-        `Preenchendo pagador: ${payer.name} (CPF ${payer.cpfMasked})` +
-          (payer.resultado
-            ? ` [resultado ${payer.resultado} — uso ${payer.payerUseIndex}/${payer.payerUseCap}]`
-            : ''),
-      );
-      page = await resolveStripeCheckoutPage(browser, page, log);
-      await focusPage(page, log);
-      await wakePage(page);
+    let payerRotations = 0;
+    let stripeDiag = null;
+    let detachPixNet = null;
 
-      const payerReady = await ensurePayerFieldsReady(
-        page,
-        sel,
-        payer,
-        payerFields,
-        log,
-      );
-      if (!payerReady) {
-        await screenshot(page, `no-payer-fields-${safe(account.email)}`, log);
-        return fail('campos nome/CPF nao preenchidos no Stripe', progress);
+
+    while (true) {
+      if (payerFields.hasCpf || payerFields.hasName) {
+        if (!payer) payer = await getPayerData(account);
+        subscribeActivityUpdate(account.email, { phase: 'nome/cpf' });
+        log.info(
+          `Preenchendo pagador: ${payer.name} (CPF ${payer.cpfMasked})` +
+            (payer.resultado
+              ? ` [resultado ${payer.resultado} — uso ${payer.payerUseIndex}/${payer.payerUseCap}]`
+              : '') +
+            (payerRotations ? ` (troca #${payerRotations})` : ''),
+        );
+        page = await resolveStripeCheckoutPage(browser, page, log);
+        await focusPage(page, log);
+        await wakePage(page);
+
+        const payerReady = await ensurePayerFieldsReady(
+          page,
+          sel,
+          payer,
+          payerFields,
+          log,
+        );
+        if (!payerReady) {
+          await screenshot(page, `no-payer-fields-${safe(account.email)}`, log);
+          return fail('campos nome/CPF nao preenchidos no Stripe', progress);
+        }
+      } else if (!payerRotations) {
+        log.info('Stripe sem campos CPF/nome — seguindo para Iniciar teste.');
       }
-    } else {
-      log.info('Stripe sem campos CPF/nome — seguindo para Iniciar teste.');
-    }
 
-    subscribeActivityUpdate(account.email, { phase: 'revelar qr' });
-    await waitForRevealButtonReady(page, log);
-    await sleep(120);
+      subscribeActivityUpdate(account.email, { phase: 'revelar qr' });
+      await waitForRevealButtonReady(page, log);
+      await sleep(120);
 
-    const stripeDiag = attachStripeDiagnostics(page, log);
-    page = await resolveStripeCheckoutPage(browser, page, log);
-    const detachPixNet = attachPixNetworkCapture(page, log);
+      stripeDiag?.detach?.();
+      detachPixNet?.();
+      stripeDiag = attachStripeDiagnostics(page, log);
+      page = await resolveStripeCheckoutPage(browser, page, log);
+      detachPixNet = attachPixNetworkCapture(page, log);
 
-    page = await clickRevealQrAndWait(page, browser, sel, log);
-    if (!page) {
+      const revealed = await clickRevealQrAndWait(page, browser, sel, log);
+      if (revealed) {
+        page = revealed;
+        break;
+      }
+
       const activePage = await resolveStripeCheckoutPage(browser, page, log);
+      const declinedMsg = await detectCardDeclinedError(activePage);
+      const canRotate = !!(
+        declinedMsg &&
+        payer?.cpf &&
+        payerFields.hasCpf &&
+        payerRotations < MAX_PAYER_ROTATIONS
+      );
+      if (canRotate) {
+        payerRotations += 1;
+        log.warn(
+          `Stripe recusou cartao/CPF ${payer.cpfMasked}: "${declinedMsg.slice(0, 120)}" — removendo da lista e tentando proximo (${payerRotations}/${MAX_PAYER_ROTATIONS})...`,
+        );
+        try {
+          payer = await rotatePayerAfterDecline(account, payer.cpf);
+          log.info(
+            `Proximo pagador: ${payer.name} (CPF ${payer.cpfMasked})` +
+              (payer.resultado
+                ? ` [resultado ${payer.resultado} — uso ${payer.payerUseIndex}/${payer.payerUseCap}]`
+                : ''),
+          );
+        } catch (rotErr) {
+          stripeDiag.detach();
+          detachPixNet?.();
+          await screenshot(
+            activePage,
+            `card-declined-no-payer-${safe(account.email)}`,
+            log,
+          );
+          return fail(
+            `cartao/CPF recusado e sem proximo pagador: ${rotErr.message}`,
+            progress,
+          );
+        }
+        page = activePage;
+        continue;
+      }
+
       const fallback = await detectStripePixContext(browser, activePage, log);
       if (fallback.state.hasPix) {
         log.info('QR PIX detectado no fallback — tentando captura...');
         page = fallback.page;
-      } else {
-        const ui = await readStripeUiState(activePage);
-        logStripeUiState(ui, log);
-        const diag = stripeDiag.getSummary();
-        if (diag.httpFailures.length)
-          log.warn('Falhas HTTP Stripe:', JSON.stringify(diag.httpFailures));
-        stripeDiag.detach();
-        detachPixNet?.();
-        await screenshot(
-          activePage,
-          `no-reveal-qr-${safe(account.email)}`,
-          log,
-        );
-        return fail(
-          'botao Revelar codigo QR nao encontrado ou QR sumiu (veja logs Stripe acima)',
-          progress,
-        );
+        break;
       }
+
+      const ui = await readStripeUiState(activePage);
+      logStripeUiState(ui, log);
+      const diag = stripeDiag.getSummary();
+      if (diag.httpFailures.length)
+        log.warn('Falhas HTTP Stripe:', JSON.stringify(diag.httpFailures));
+      stripeDiag.detach();
+      detachPixNet?.();
+      await screenshot(
+        activePage,
+        `no-reveal-qr-${safe(account.email)}`,
+        log,
+      );
+      return fail(
+        declinedMsg
+          ? `cartao/CPF recusado pelo Stripe: ${declinedMsg.slice(0, 120)}`
+          : 'botao Revelar codigo QR nao encontrado ou QR sumiu (veja logs Stripe acima)',
+        progress,
+      );
     }
 
-    stripeDiag.detach();
+    stripeDiag?.detach?.();
     page = await resolveStripeCheckoutPage(browser, page, log);
     log.info('Capturando PIX e enviando...');
 
@@ -359,6 +416,7 @@ export async function subscribeTrialPix(
     });
 
     if (!pix || (!pix.copyPaste && !pix.qrImagePath)) {
+      detachPixNet?.();
       await screenshot(page, `no-pix-screen-${safe(account.email)}`, log);
       return fail(
         'tela PIX nao apareceu ou QR sumiu antes da captura',
@@ -367,9 +425,6 @@ export async function subscribeTrialPix(
     }
 
     log.info('PIX capturado com sucesso.');
-    // #region agent log
-    fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'E',location:'grokSubscribe.js:subscribeTrialPix:qrCaptured',message:'QR capturado',data:{email:account.email,msTotal:Date.now()-__dbgT0},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     detachPixNet?.();
 
     return {
@@ -387,11 +442,15 @@ export async function subscribeTrialPix(
         'Frame quebrado no subscribe — recuperando via reload e retentando...',
       );
       const recovered = await recoverBrokenFrame(browser, page, log);
+      const resumeStripe = isStripeCheckoutUrl(
+        String(recovered?.url?.() || page?.url?.() || ''),
+      );
       return subscribeTrialPix(recovered || page, account, {
         log,
         browser,
         workerId,
         _frameRetry: _frameRetry + 1,
+        _resumeStripe: resumeStripe,
       });
     }
     log.error(`Erro na assinatura: ${err.message}`);
@@ -416,6 +475,21 @@ function isFrameBrokenError(err) {
 async function recoverBrokenFrame(browser, page, log) {
   const base = (config.postLoginUrl || 'https://grok.com').replace(/\/$/, '');
   try {
+    // Se o checkout Stripe ja estava aberto, NUNCA voltar pro #subscribe
+    // (isso causava ping-pong Stripe → subscribe).
+    const stripe = await resolveStripeCheckoutPage(browser, page, log).catch(
+      () => null,
+    );
+    if (stripe && isStripeCheckoutUrl(stripe.url?.() || '')) {
+      log?.warn?.(
+        'Frame quebrado no Stripe — recarregando checkout (sem voltar ao subscribe).',
+      );
+      await stripe.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+      await sleep(800);
+      browser.__realPage = stripe;
+      return stripe;
+    }
+
     page = await resolveGrokPlanPage(browser, page, log).catch(() => page);
 
     // Frame irrecuperavel (evaluate falha ate depois do reload): abre aba nova
@@ -475,10 +549,6 @@ async function assertStripeIsTrialCheckout(
 }
 
 async function guardStripeTrialOrFail(page, browser, log, { settleMs } = {}) {
-  // #region agent log
-  const __dbgGuard0 = Date.now();
-  let __dbgLoadingLoops = 0;
-  // #endregion
   if (browser) {
     page = await resolveStripeCheckoutPage(browser, page, log).catch(
       () => page,
@@ -498,18 +568,12 @@ async function guardStripeTrialOrFail(page, browser, log, { settleMs } = {}) {
       logOnFail: false,
     });
     if (check.ok) {
-      // #region agent log
-      fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'D',location:'grokSubscribe.js:guardStripeTrialOrFail:ok',message:'stripe trial confirmado',data:{ms:Date.now()-__dbgGuard0,loadingLoops:__dbgLoadingLoops,url:(page.url?.()||'').slice(0,90)},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       return { ok: true, page };
     }
     last = check;
 
     // Ainda carregando: nao abortar cedo.
     if (check.loading) {
-      // #region agent log
-      __dbgLoadingLoops += 1;
-      // #endregion
       if (!loggedLoading) {
         log.debug(
           `Aguardando checkout Stripe carregar (${Math.round(waitMs / 1000)}s)...`,
@@ -594,9 +658,6 @@ async function ensureTrialPlansReady(page, log, browser) {
 
   // Router SPA precisa estar hidratado para reagir ao hash — hash aplicado
   // cedo demais e ignorado e a instancia fica "presa" na home.
-  // #region agent log
-  const __dbgHydT0 = Date.now();
-  // #endregion
   await page
     .waitForFunction(
       () =>
@@ -607,33 +668,18 @@ async function ensureTrialPlansReady(page, log, browser) {
       { timeout: 3000, polling: 120 },
     )
     .catch(() => {});
-  // #region agent log
-  fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'A',location:'grokSubscribe.js:ensureTrialPlansReady:hydration',message:'hydration wait',data:{ms:Date.now()-__dbgHydT0,url:(page.url?.()||'').slice(0,90)},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   // Banner de cookies do grok.com renderiza APOS a hidratacao — o observer
   // in-page fecha na hora; dismiss extra cobre banner ja aberto.
   await installCookieAutoDismiss(page);
-  // #region agent log
-  const __dbgCk0 = Date.now();
-  // #endregion
   await dismissCookieBanner(page, { timeout: 1200 }).catch(() => {});
-  // #region agent log
-  fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'B',location:'grokSubscribe.js:ensureTrialPlansReady:cookieDismiss',message:'cookie dismiss pos-hidratacao',data:{ms:Date.now()-__dbgCk0},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
 
   // 1) Abre o modal de planos via #subscribe (hash SPA, ~1s). Se o router
   //    ignorou o primeiro hash (hidratacao tardia), reaplica com reset.
   for (let i = 0; i < 3; i++) {
-    // #region agent log
-    const __dbgHash0 = Date.now();
-    // #endregion
     await openSubscribeHashIfOnGrokHome(page, { log, force: i > 0 });
-    const __dbgCtaOk = await waitForTrialPlanCta(page, i === 0 ? 5000 : 4000);
-    // #region agent log
-    fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'C',location:'grokSubscribe.js:ensureTrialPlansReady:hashAttempt',message:'hash attempt',data:{attempt:i+1,ctaVisible:__dbgCtaOk,ms:Date.now()-__dbgHash0,url:(page.url?.()||'').slice(0,90)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-    if (__dbgCtaOk) return true;
+    const ctaOk = await waitForTrialPlanCta(page, i === 0 ? 5000 : 4000);
+    if (ctaOk) return true;
     if (await isPaidOnlySubscribePage(page)) {
       log.warn('Tela de planos pagos detectada — conta sem trial $0.');
       return false;
@@ -980,9 +1026,6 @@ async function waitForStripeAfterPlanClick(
           .evaluate(trialPlanOfferVisibleInPage)
           .catch(() => false);
         if (ctaStillVisible) {
-          // #region agent log
-          fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',runId:'post-fix',hypothesisId:'D',location:'grokSubscribe.js:waitForStripeAfterPlanClick:earlyAbort',message:'CTA ainda visivel apos clique — abortando espera cedo',data:{ms:Date.now()-start,url:(page.url?.()||'').slice(0,90)},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           log?.debug?.(
             'CTA do plano ainda visivel apos clique — re-clicando sem esperar timeout.',
           );
@@ -1352,6 +1395,8 @@ async function pollThroughTrialPlanToStripe(
   let attempt = 0;
   let grokErrors = 0;
   let lastClickAt = 0;
+  /** Uma vez visto checkout Stripe nesta conta, nao reabrir #subscribe nem re-clicar. */
+  let seenStripe = false;
   const tag = email || '?';
 
   const syncProgress = () => {
@@ -1367,13 +1412,24 @@ async function pollThroughTrialPlanToStripe(
     });
   };
 
+  const markStripeIfNeeded = (p) => {
+    try {
+      if (isStripeCheckoutUrl(String(p?.url?.() || ''))) seenStripe = true;
+    } catch {
+      /* noop */
+    }
+  };
+
   while (Date.now() < deadline) {
     try {
       page = await resolveSubscribeFlowPage(browser, page, log);
       await focusPage(page, log);
+      markStripeIfNeeded(page);
+
 
       if (await isStripeCheckoutUiReady(page)) {
         const trialStripe = await guardStripeTrialOrFail(page, browser, log);
+        markStripeIfNeeded(trialStripe.page);
         if (!trialStripe.ok) {
           return {
             ok: false,
@@ -1394,11 +1450,20 @@ async function pollThroughTrialPlanToStripe(
       }
 
       if (!(await isOnSubscribeOrPlanPage(page))) {
+        // Ja vimos Stripe nesta conta: nao reabrir #subscribe (ping-pong).
+        if (seenStripe) {
+          page = await resolveStripeCheckoutPage(browser, page, log).catch(
+            () => page,
+          );
+          markStripeIfNeeded(page);
+          await sleep(400);
+          continue;
+        }
         // Logo apos um clique no CTA a pagina transiciona para o checkout
         // (DOM ainda vazio) — reaplicar o hash aqui puxava a instancia DE VOLTA
         // pro subscribe (ping-pong checkout→subscribe). Da carencia pro
         // checkout montar antes de reabrir o modal.
-        if (lastClickAt && Date.now() - lastClickAt < 8000) {
+        if (lastClickAt && Date.now() - lastClickAt < 12000) {
           await sleep(400);
           continue;
         }
@@ -1419,6 +1484,16 @@ async function pollThroughTrialPlanToStripe(
         };
       }
 
+      // Ja navegou pro Stripe: nao clicar de novo no CTA (evita voltar ao modal).
+      if (seenStripe) {
+        page = await resolveStripeCheckoutPage(browser, page, log).catch(
+          () => page,
+        );
+        markStripeIfNeeded(page);
+        await sleep(400);
+        continue;
+      }
+
       attempt += 1;
       syncProgress();
       log.info(
@@ -1427,9 +1502,6 @@ async function pollThroughTrialPlanToStripe(
       log.summary(
         `SUBSCRIBE em andamento: ${tag} | clique plano ${attempt} | erros Grok ${grokErrors}`,
       );
-      // #region agent log
-      const __dbgClk0 = Date.now();
-      // #endregion
       const step = await advanceTrialPlanStep(page, sel, log, browser);
       if (step?.page) page = step.page;
       if (step?.clicked) {
@@ -1437,9 +1509,7 @@ async function pollThroughTrialPlanToStripe(
       } else {
         log.warn('Clique em Solicitar oferta falhou — tentando de novo...');
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7486/ingest/ab7e904f-d0d1-4573-8cae-683a74a54ae6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6c0c35'},body:JSON.stringify({sessionId:'6c0c35',hypothesisId:'D',location:'grokSubscribe.js:pollThroughTrialPlanToStripe:click',message:'plan click',data:{attempt,clicked:!!step?.clicked,clickMs:Date.now()-__dbgClk0,url:(page.url?.()||'').slice(0,90)},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
+      markStripeIfNeeded(page);
 
       // Sem erro do Grok, re-clica rapido (5s); erro "Algo deu errado" exige
       // cooldown cheio (retryMs) antes do proximo clique.
@@ -1448,9 +1518,11 @@ async function pollThroughTrialPlanToStripe(
         page = await resolveSubscribeFlowPage(browser, page, log).catch(
           () => page,
         );
+        markStripeIfNeeded(page);
 
         if (await isStripeCheckoutUiReady(page)) {
           const trialStripe = await guardStripeTrialOrFail(page, browser, log);
+          markStripeIfNeeded(trialStripe.page);
           if (!trialStripe.ok) {
             return {
               ok: false,
@@ -2233,6 +2305,8 @@ async function readPayerFieldState(page) {
     hasNameField: false,
     cpfDigits: 0,
     nameLen: 0,
+    cpf: '',
+    name: '',
   };
   for (const ctx of listStripePaymentContexts(page, { paymentFirst: true })) {
     try {
@@ -2273,19 +2347,29 @@ async function readPayerFieldState(page) {
           ['nome', 'name', 'pagador'],
           ['input[name="name"]', 'input[autocomplete="name"]'],
         );
+        const cpf = (tax?.value || '').replace(/\D/g, '');
+        const nameVal = (name?.value || '').trim();
         return {
           hasCpfField: !!tax?.el,
           hasNameField: !!name?.el,
-          cpfDigits: (tax?.value || '').replace(/\D/g, '').length,
-          nameLen: (name?.value || '').trim().length,
+          cpfDigits: cpf.length,
+          nameLen: nameVal.length,
+          cpf,
+          name: nameVal,
         };
         /* eslint-enable no-undef */
       });
       if (s) {
         best.hasCpfField = best.hasCpfField || s.hasCpfField;
         best.hasNameField = best.hasNameField || s.hasNameField;
-        best.cpfDigits = Math.max(best.cpfDigits, s.cpfDigits);
-        best.nameLen = Math.max(best.nameLen, s.nameLen);
+        if (s.cpfDigits >= best.cpfDigits) {
+          best.cpfDigits = s.cpfDigits;
+          best.cpf = s.cpf || best.cpf;
+        }
+        if (s.nameLen >= best.nameLen) {
+          best.nameLen = s.nameLen;
+          best.name = s.name || best.name;
+        }
       }
     } catch {
       /* frame pode ter navegado */
@@ -2294,9 +2378,16 @@ async function readPayerFieldState(page) {
   return best;
 }
 
-function isPayerStateComplete(state, { hasCpf, hasName }) {
+/** Campos preenchidos E (quando payer informado) batendo com o pagador atual. */
+function isPayerStateComplete(state, { hasCpf, hasName }, payer = null) {
   if (hasCpf && state.cpfDigits < 11) return false;
   if (hasName && state.nameLen < 3) return false;
+  if (payer?.cpf && hasCpf && state.cpf && state.cpf !== payer.cpf) return false;
+  if (payer?.name && hasName && state.name) {
+    if (state.name.trim().toLowerCase() !== payer.name.trim().toLowerCase()) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -2405,21 +2496,36 @@ async function fillPayerFieldsAtomic(
         return null;
       };
 
-      const cpfDigits = (el) => (el?.value || '').replace(/\D/g, '').length;
-      const nameLen = (el) => (el?.value || '').trim().length;
+      const cpfValue = (el) => (el?.value || '').replace(/\D/g, '');
+      const nameValue = (el) => (el?.value || '').trim();
+      const wantName = String(name || '').trim();
 
       const cpfEl = requireCpf ? findCpfInput() : null;
       const nameEl = requireName ? findNameInput() : null;
 
-      if (nameEl && nameLen(nameEl) < 3) setValue(nameEl, name);
-      if (cpfEl && cpfDigits(cpfEl) < 11) {
+      // Sobrescreve se vazio OU se ainda tem CPF/nome do pagador anterior (pos-rotacao).
+      if (
+        nameEl &&
+        (nameValue(nameEl).length < 3 ||
+          nameValue(nameEl).toLowerCase() !== wantName.toLowerCase())
+      ) {
+        setValue(nameEl, wantName);
+      }
+      if (cpfEl && (cpfValue(cpfEl).length < 11 || cpfValue(cpfEl) !== cpf)) {
         setValue(cpfEl, cpfMasked);
-        if (cpfDigits(cpfEl) < 11) setValue(cpfEl, cpf);
+        if (cpfValue(cpfEl).length < 11 || cpfValue(cpfEl) !== cpf) {
+          setValue(cpfEl, cpf);
+        }
       }
 
+      const finalCpf = cpfValue(cpfEl);
+      const finalName = nameValue(nameEl);
       return {
-        nameOk: !requireName || nameLen(nameEl) >= 3,
-        cpfOk: !requireCpf || cpfDigits(cpfEl) >= 11,
+        nameOk:
+          !requireName ||
+          (finalName.length >= 3 &&
+            finalName.toLowerCase() === wantName.toLowerCase()),
+        cpfOk: !requireCpf || (finalCpf.length >= 11 && finalCpf === cpf),
         foundName: !!nameEl,
         foundCpf: !!cpfEl,
       };
@@ -2447,11 +2553,21 @@ async function fillPayerFields(
 
   for (let round = 0; round < maxRounds; round++) {
     let state = await readPayerFieldState(page);
-    if (isPayerStateComplete(state, payerOpts)) {
+    if (isPayerStateComplete(state, payerOpts, payer)) {
       log.info(
         `Campos pagador: nome=ok cpf=ok${round ? ` (round ${round + 1})` : ''}`,
       );
       return true;
+    }
+
+    if (
+      round === 0 &&
+      (state.cpfDigits >= 11 || state.nameLen >= 3) &&
+      !isPayerStateComplete(state, payerOpts, payer)
+    ) {
+      log.info(
+        `Pagador no Stripe desatualizado (cpf=${state.cpf || '?'} nome="${state.name || ''}") — sobrescrevendo com ${payer.cpfMasked} / ${payer.name}`,
+      );
     }
 
     for (const ctx of listStripePaymentContexts(page, { paymentFirst: true })) {
@@ -2468,13 +2584,23 @@ async function fillPayerFields(
     }
 
     state = await readPayerFieldState(page);
-    const needName = requireName && state.nameLen < 3;
-    const needCpf = requireCpf && state.cpfDigits < 11;
-    if (!needName && !needCpf) return true;
+    if (isPayerStateComplete(state, payerOpts, payer)) return true;
+
+    const needName =
+      requireName &&
+      (state.nameLen < 3 ||
+        !state.name ||
+        state.name.trim().toLowerCase() !==
+          String(payer.name || '')
+            .trim()
+            .toLowerCase());
+    const needCpf =
+      requireCpf &&
+      (state.cpfDigits < 11 || !state.cpf || state.cpf !== payer.cpf);
 
     if (needName || needCpf) {
       log.debug(
-        `Pagador incompleto (round ${round + 1}): nome=${state.nameLen} cpf=${state.cpfDigits}/11 — fallback teclado`,
+        `Pagador incompleto/desatualizado (round ${round + 1}): nome=${state.nameLen} cpf=${state.cpfDigits}/11 — fallback teclado`,
       );
       const cpfSelectors = uniqueSelectors(
         sel.payerCpfInput,
@@ -2490,6 +2616,7 @@ async function fillPayerFields(
         if (needName) {
           await fillStripeFieldKeyboard(ctx, nameSelectors, payer.name, {
             minLen: 3,
+            matchText: payer.name,
           });
         }
         if (needCpf) {
@@ -2499,6 +2626,7 @@ async function fillPayerFields(
             payer.cpfMasked,
             {
               digits: 11,
+              matchDigits: payer.cpf,
             },
           );
           if (!cpfOk) {
@@ -2506,7 +2634,7 @@ async function fillPayerFields(
               ctx,
               cpfSelectors,
               payer.cpf,
-              { digits: 11 },
+              { digits: 11, matchDigits: payer.cpf },
             );
           }
         }
@@ -2517,9 +2645,9 @@ async function fillPayerFields(
   }
 
   const final = await readPayerFieldState(page);
-  const ok = isPayerStateComplete(final, payerOpts);
+  const ok = isPayerStateComplete(final, payerOpts, payer);
   log.info(
-    `Campos pagador: nome=${final.nameLen >= 3} cpf=${final.cpfDigits}/11`,
+    `Campos pagador: nome=${final.nameLen >= 3 && (!payer?.name || final.name.trim().toLowerCase() === payer.name.trim().toLowerCase())} cpf=${final.cpfDigits}/11 match=${!payer?.cpf || final.cpf === payer.cpf}`,
   );
   return ok;
 }
@@ -2529,10 +2657,15 @@ async function fillStripeFieldKeyboard(
   page,
   selectors,
   value,
-  { digits, minLen } = {},
+  { digits, minLen, matchDigits, matchText } = {},
 ) {
   if (!value) return false;
-  const opts = { digits: digits || 0, minLen: minLen || 1 };
+  const opts = {
+    digits: digits || 0,
+    minLen: minLen || 1,
+    matchDigits: matchDigits ? String(matchDigits).replace(/\D/g, '') : '',
+    matchText: matchText ? String(matchText).trim().toLowerCase() : '',
+  };
 
   for (const selector of selectors) {
     const handle = await page.$(selector).catch(() => null);
@@ -2541,8 +2674,18 @@ async function fillStripeFieldKeyboard(
     try {
       const alreadyOk = await handle.evaluate((el, o) => {
         const v = el.value || '';
-        if (o.digits) return v.replace(/\D/g, '').length >= o.digits;
-        if (o.minLen) return v.trim().length >= o.minLen;
+        if (o.digits) {
+          const d = v.replace(/\D/g, '');
+          if (d.length < o.digits) return false;
+          if (o.matchDigits && d !== o.matchDigits) return false;
+          return true;
+        }
+        if (o.minLen) {
+          const t = v.trim();
+          if (t.length < o.minLen) return false;
+          if (o.matchText && t.toLowerCase() !== o.matchText) return false;
+          return true;
+        }
         return v.length > 0;
       }, opts);
       if (alreadyOk) return true;
@@ -2567,13 +2710,25 @@ async function fillStripeFieldKeyboard(
         return (el.value || '').length > 0;
       }, String(value));
 
+      const matchesOpts = (el, o) => {
+        const v = el.value || '';
+        if (o.digits) {
+          const d = v.replace(/\D/g, '');
+          if (d.length < o.digits) return false;
+          if (o.matchDigits && d !== o.matchDigits) return false;
+          return true;
+        }
+        if (o.minLen) {
+          const t = v.trim();
+          if (t.length < o.minLen) return false;
+          if (o.matchText && t.toLowerCase() !== o.matchText) return false;
+          return true;
+        }
+        return v.length > 0;
+      };
+
       if (viaJs) {
-        const ok = await handle.evaluate((el, o) => {
-          const v = el.value || '';
-          if (o.digits) return v.replace(/\D/g, '').length >= o.digits;
-          if (o.minLen) return v.trim().length >= o.minLen;
-          return v.length > 0;
-        }, opts);
+        const ok = await handle.evaluate(matchesOpts, opts);
         if (ok) return true;
       }
 
@@ -2586,12 +2741,7 @@ async function fillStripeFieldKeyboard(
       await handle.evaluate((el) => el.blur?.());
       await sleep(120);
 
-      const ok = await handle.evaluate((el, o) => {
-        const v = el.value || '';
-        if (o.digits) return v.replace(/\D/g, '').length >= o.digits;
-        if (o.minLen) return v.trim().length >= o.minLen;
-        return v.length > 0;
-      }, opts);
+      const ok = await handle.evaluate(matchesOpts, opts);
       if (ok) return true;
     } catch {
       /* proximo selector */
@@ -2816,6 +2966,15 @@ async function waitForQrVisible(
     }
 
     page = await resolveStripeCheckoutPage(browser, page, log);
+
+    const declinedEarly = await detectCardDeclinedError(page);
+    if (declinedEarly) {
+      log.warn(
+        `Stripe recusou cartao/CPF enquanto aguardava QR: ${declinedEarly.slice(0, 160)}`,
+      );
+      return null;
+    }
+
     const ctx = await detectStripePixContext(browser, page, log);
     const state = ctx.state;
 

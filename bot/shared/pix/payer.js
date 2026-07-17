@@ -1,6 +1,9 @@
 import { config } from '../config.js';
 import { normalizeCpf, formatCpfMasked } from '../pix/cpf.js';
-import { reservePayerForAccount } from '../pix/payerStore.js';
+import {
+  discardPayerAndReserveNext,
+  reservePayerForAccount,
+} from '../pix/payerStore.js';
 
 export { normalizeCpf, formatCpfMasked, maskCpf } from '../pix/cpf.js';
 
@@ -33,4 +36,19 @@ export async function getPayerData(account = {}) {
   if (!cpf) throw new Error('CPF do pagador PIX invalido (PIX_PAYER_CPF, payer-results.txt ou account.cpf).');
 
   return { name, cpf, cpfMasked: formatCpfMasked(cpf) };
+}
+
+/**
+ * Apos Stripe recusar cartao/CPF: remove da lista e reserva o proximo.
+ * So funciona com payer-results.txt (nao com CPF fixo na conta/env).
+ */
+export async function rotatePayerAfterDecline(account = {}, badCpf = '') {
+  if (!config.payerResultsFile) {
+    throw new Error(
+      'Stripe recusou o cartao/CPF, mas nao ha lista de pagadores (PAYER_RESULTS_FILE) para trocar.',
+    );
+  }
+  const email = account.email || account.mail;
+  const cpf = badCpf || account.cpf || account.document;
+  return discardPayerAndReserveNext(email, cpf);
 }

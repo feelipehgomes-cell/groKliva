@@ -77,7 +77,18 @@ export async function readStripeUiState(page) {
       (pixState) => {
         /* eslint-disable no-undef */
         const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-        const alerts = Array.from(document.querySelectorAll('[role="alert"], [class*="Error" i]'))
+        const alerts = Array.from(
+          document.querySelectorAll(
+            [
+              '[role="alert"]',
+              '[class*="Error" i]',
+              '.ConfirmPaymentButton-Error',
+              '.Notice--red',
+              '.Notice-message',
+              '.Notice.Notice--red',
+            ].join(', '),
+          ),
+        )
           .map((el) => norm(el.innerText))
           .filter((t) => t.length > 3 && t.length < 400);
 
@@ -103,6 +114,76 @@ export async function readStripeUiState(page) {
   } catch (e) {
     return { alerts: [], error: e.message };
   }
+}
+
+/** "Seu cartão foi recusado. Tente usar outro." (e variantes EN). */
+export function isCardDeclinedMessage(text) {
+  const t = String(text || '');
+  return (
+    /cart[aã]o\s+foi\s+recusado/i.test(t) ||
+    /card\s+(was\s+)?declined/i.test(t) ||
+    (/recusado/i.test(t) && /outro/i.test(t)) ||
+    (/declined/i.test(t) && /another|other/i.test(t))
+  );
+}
+
+/**
+ * Procura erro de cartao/CPF recusado na pagina Stripe e iframes de pagamento.
+ * @returns {Promise<string|null>} texto do erro ou null
+ */
+export async function detectCardDeclinedError(page) {
+  if (!page) return null;
+
+  const collectFrom = async (ctx) => {
+    try {
+      return await ctx.evaluate(() => {
+        /* eslint-disable no-undef */
+        const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+        const nodes = Array.from(
+          document.querySelectorAll(
+            [
+              '.ConfirmPaymentButton-Error',
+              '.Notice--red',
+              '.Notice-message',
+              '[role="alert"]',
+              '[class*="Error" i]',
+            ].join(', '),
+          ),
+        );
+        const fromNodes = nodes.map((el) => norm(el.innerText)).filter(Boolean);
+        const body = norm(document.body?.innerText || '').slice(0, 800);
+        return { fromNodes, body };
+        /* eslint-enable no-undef */
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const contexts = [page];
+  try {
+    for (const frame of page.frames?.() || []) {
+      if (frame !== page.mainFrame?.()) contexts.push(frame);
+    }
+  } catch {
+    /* noop */
+  }
+
+  for (const ctx of contexts) {
+    const hit = await collectFrom(ctx);
+    if (!hit) continue;
+    for (const msg of hit.fromNodes || []) {
+      if (isCardDeclinedMessage(msg)) return msg;
+    }
+    if (isCardDeclinedMessage(hit.body)) {
+      const m = hit.body.match(
+        /[^.?!]*(?:cart[aã]o\s+foi\s+recusado|card\s+(?:was\s+)?declined)[^.?!]*[.?!]?/i,
+      );
+      return (m?.[0] || hit.body).trim().slice(0, 200);
+    }
+  }
+
+  return null;
 }
 
 export function logStripeUiState(ui, log) {

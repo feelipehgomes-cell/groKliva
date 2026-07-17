@@ -169,6 +169,55 @@ export function assertPayerResultsAvailable() {
   }
 }
 
+function pickAndReservePayer(addr, state, blocks) {
+  const cap = config.payerAccountsPerResult;
+
+  if (state.byEmail[addr]) {
+    const cpf = state.byEmail[addr];
+    const block = findBlock(blocks, cpf);
+    if (block) {
+      return payerFromBlock(block, state.usageByCpf[cpf] || 0, cap);
+    }
+  }
+
+  if (!blocks.length) {
+    throw new Error(
+      `Lista de pagadores PIX vazia (${resultsPath()}). ` +
+        'Preencha payer-results.txt com linhas cpf|nome antes de continuar.',
+    );
+  }
+
+  let picked = null;
+  for (const block of blocks) {
+    const used = state.usageByCpf[block.cpf] || 0;
+    if (used < cap) {
+      picked = block;
+      break;
+    }
+  }
+
+  if (!picked) {
+    throw new Error(
+      `Nenhum pagador PIX com vaga (${cap} contas por RESULTADO). ` +
+        `Adicione novos dados em ${resultsPath()}.`,
+    );
+  }
+
+  const nextUse = (state.usageByCpf[picked.cpf] || 0) + 1;
+  state.usageByCpf[picked.cpf] = nextUse;
+  state.byEmail[addr] = picked.cpf;
+  saveState(state);
+
+  if (nextUse >= cap) {
+    const remaining = blocks.filter((b) => b.cpf !== picked.cpf);
+    writeBlocks(remaining);
+    delete state.usageByCpf[picked.cpf];
+    saveState(state);
+  }
+
+  return payerFromBlock(picked, nextUse, cap);
+}
+
 /**
  * Reserva nome/CPF para uma conta (idempotente por email).
  * @param {string} email
@@ -179,53 +228,44 @@ export function reservePayerForAccount(email) {
 
   chain = chain.then(() => {
     const state = loadState();
-    const cap = config.payerAccountsPerResult;
-    let blocks = readBlocks();
+    const blocks = readBlocks();
+    return pickAndReservePayer(addr, state, blocks);
+  });
 
-    if (state.byEmail[addr]) {
-      const cpf = state.byEmail[addr];
-      const block = findBlock(blocks, cpf);
-      if (block) {
-        return payerFromBlock(block, state.usageByCpf[cpf] || 0, cap);
-      }
+  return chain;
+}
+
+/**
+ * Remove CPF recusado da lista, limpa reservas e atribui o proximo pagador a conta.
+ * @param {string} email
+ * @param {string} badCpf
+ */
+export function discardPayerAndReserveNext(email, badCpf) {
+  const addr = String(email || '').trim().toLowerCase();
+  const cpf =
+    normalizeCpf(badCpf) || String(badCpf || '').replace(/\D/g, '');
+  if (!addr) throw new Error('Email da conta ausente para trocar pagador PIX.');
+  if (!cpf) throw new Error('CPF invalido para descarte apos recusa.');
+
+  chain = chain.then(() => {
+    let blocks = readBlocks().filter((b) => b.cpf !== cpf);
+    writeBlocks(blocks);
+
+    const state = loadState();
+    delete state.usageByCpf[cpf];
+    for (const [em, mapped] of Object.entries(state.byEmail)) {
+      if (mapped === cpf || em === addr) delete state.byEmail[em];
     }
+    saveState(state);
 
     if (!blocks.length) {
       throw new Error(
-        `Lista de pagadores PIX vazia (${resultsPath()}). ` +
-          'Preencha payer-results.txt com linhas cpf|nome antes de continuar.',
+        `Lista de pagadores PIX vazia apos remover CPF recusado (${formatCpfMasked(cpf)}). ` +
+          `Adicione novos CPFs em ${resultsPath()}.`,
       );
     }
 
-    let picked = null;
-    for (const block of blocks) {
-      const used = state.usageByCpf[block.cpf] || 0;
-      if (used < cap) {
-        picked = block;
-        break;
-      }
-    }
-
-    if (!picked) {
-      throw new Error(
-        `Nenhum pagador PIX com vaga (${cap} contas por RESULTADO). ` +
-          `Adicione novos dados em ${resultsPath()}.`,
-      );
-    }
-
-    const nextUse = (state.usageByCpf[picked.cpf] || 0) + 1;
-    state.usageByCpf[picked.cpf] = nextUse;
-    state.byEmail[addr] = picked.cpf;
-    saveState(state);
-
-    if (nextUse >= cap) {
-      blocks = blocks.filter((b) => b.cpf !== picked.cpf);
-      writeBlocks(blocks);
-      delete state.usageByCpf[picked.cpf];
-      saveState(state);
-    }
-
-    return payerFromBlock(picked, nextUse, cap);
+    return pickAndReservePayer(addr, state, blocks);
   });
 
   return chain;
